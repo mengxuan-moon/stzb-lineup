@@ -1,5 +1,6 @@
-"""Streamlit 单机界面：我的武将 / 我的战法 / 搭队伍 / 推荐结果。
+"""Streamlit 单机界面：常用武将 / 常用战法 / 配将界面 / 推荐结果 / 数据与规则。
 
+离线版：不登录、不口令；③ 页武将池与战法池直接是全库。① ② 页的勾选只是快捷筛选。
 启动：  streamlit run stzb_app/app.py
 """
 from __future__ import annotations
@@ -262,8 +263,12 @@ def load_manual_seeds(user_key: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------- layout
+# 构建标记：每次发版改一下，用来一眼确认线上跑的是不是最新代码
+# （Cloud 有过「页面像新版、代码是旧版 .pyc」的坑，见 README 云端排障）。
+BUILD_TAG = "2026-10-20-offline1"
+
 st.title("⚔️ 率土之滨 · 配将推荐")
-st.caption("规则引擎 + 评分表（v1，不做战斗模拟）｜数据只在本机 SQLite")
+st.caption(f"规则引擎 + 评分表（v1，不做战斗模拟）｜build {BUILD_TAG}")
 
 owned_heroes, owned_skills = owned_sets(user_key)
 # 设置只在本次 run 开头读一次，②页开关、④页滑杆、⑤页说明共用同一份

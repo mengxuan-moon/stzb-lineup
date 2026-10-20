@@ -240,7 +240,7 @@
     }).join("");
     const blank = `<option value="">（不选）</option>`;
     el.className = "panel on";
-    el.innerHTML = `<div class="phead">${editPos} · ${h.name} —— 选择战法（只列兵种兼容且已拥有的战法）</div>
+    el.innerHTML = `<div class="phead">${editPos} · ${h.name} —— 选择战法（全库，按兵种兼容过滤）</div>
       <div class="prow">
         <label>战法1</label><select data-sk="0">${blank}${opts}</select>
         <label>战法2</label><select data-sk="1">${blank}${opts}</select>

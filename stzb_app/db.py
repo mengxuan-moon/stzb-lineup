@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
+import tempfile
 import time
 from pathlib import Path
 
@@ -19,7 +21,48 @@ SCHEMA_PATH = BASE_DIR / "schema.sql"
 # 允许用环境变量把库指到别处（相对路径按当前工作目录解析）。
 # 冒烟测试就是这么把 AppTest 引到生产库的**副本**上的：否则界面测试一路
 # 往真库里写队伍/评分历史，测试一跑用户的持仓和推荐记录就被改了。
-DB_PATH = Path(os.environ.get("STZB_DB") or (BASE_DIR / "data" / "stzb.db"))
+_SHIPPED_DB = Path(os.environ.get("STZB_DB") or (BASE_DIR / "data" / "stzb.db"))
+
+
+def _is_cloud() -> bool:
+    """是不是「库放在网络文件系统上」的托管环境（Streamlit Community Cloud）。
+
+    实测（2026-10-20）：在 Cloud 的 /mount/src 里直接打开随仓库发布的 SQLite
+    并切 WAL，会抛 `DatabaseError: database disk image is malformed`，整个页面
+    起不来。把库复制到容器本地临时目录再开就正常。
+    `STZB_DB_COPY=1` 可以让本机也走这条复制路径，方便复现/回归。
+    """
+    if os.environ.get("STZB_DB_COPY"):
+        return True
+    if os.environ.get("STREAMLIT_SHARING_MODE"):
+        return True
+    return str(BASE_DIR).startswith("/mount/src")
+
+
+def _runtime_db(path: Path) -> Path:
+    """云端：把发布的库复制到 tempfile 下的运行副本并返回它。
+
+    库随仓库发布、每次部署回来都是初始状态，所以复制成本只有几 MB；
+    复制失败（只读盘等）就退回原路径，让上层报出真实错误。
+    """
+    rt = Path(tempfile.gettempdir()) / "stzb_runtime" / "stzb.db"
+    try:
+        rt.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            same = rt.exists() and rt.stat().st_size == path.stat().st_size
+            if not same:
+                shutil.copy2(path, rt)
+                # 复制件旁边绝不能留旧的 -wal/-shm，否则会拼出坏库
+                for suf in ("-wal", "-shm"):
+                    leftover = Path(str(rt) + suf)
+                    if leftover.exists():
+                        leftover.unlink()
+    except OSError:
+        return path
+    return rt if rt.exists() else path
+
+
+DB_PATH = _runtime_db(_SHIPPED_DB) if _is_cloud() else _SHIPPED_DB
 
 ENGINE_VERSION = "1.0.0"
 PROFILE_ID = "default"
@@ -131,6 +174,25 @@ def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
     而且 busy_timeout 对这类库级切换不一定生效。
     """
     path = Path(db_path) if db_path else DB_PATH
+    try:
+        return _open(path)
+    except sqlite3.DatabaseError as exc:
+        msg = str(exc).lower()
+        # 只对「云上运行副本」做一次自愈：删除坏副本、从发布件重拷再开。
+        if not ("malformed" in msg or "corrupt" in msg or "not a database" in msg):
+            raise
+        if db_path or not _is_cloud():
+            raise
+        for suf in ("", "-wal", "-shm"):
+            try:
+                Path(str(path) + suf).unlink()
+            except OSError:
+                pass
+        _runtime_db(_SHIPPED_DB)
+        return _open(path)
+
+
+def _open(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
