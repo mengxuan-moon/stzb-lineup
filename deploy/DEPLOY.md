@@ -23,7 +23,9 @@ python -m stzb_app.tools.tunnel stop       :: 关掉
 1. 把仓库推到 GitHub（根目录就是 `E:\dsh`，`requirements.txt` 已在根）。
    ⚠️ **这台机器直连 GitHub 拉大文件是被阻断的**（实测 `curl` 到 github.com / api.github.com TLS 通但 0 字节、error 28；ghproxy/jsdelivr/unpkg 也 000；npm 直连约 1KB/s，但 `cdn.npmmirror.com` 有 5.6MB/s）。所以 `git push` 前先确认这条链路能通，否则走代理，或换一台机器推。
 2. share.streamlit.io → New app → 选仓库 → Main file path 填 `stzb_app/app.py` → Deploy。
-3. 在 App settings → Secrets 里加 `password = "..."`（公网建议设）。
+3. **把应用本身改成公开（最容易漏的一步）**：应用页右下角 `⋮` → Settings → Sharing → "Who can view this app" → 选 public / anyone with the link → Save。
+   - 只把仓库转 Public **不够**：应用会带着部署时的私有状态继续要求登录。实测现象：浏览器里登录 Streamlit 的人能打开，匿名 `curl <地址>/_stcore/health` 却返回 **303**（跳 `share.streamlit.io/-/auth/app`）。判据就是 health 必须 **200**。
+4. 在 App settings → Secrets 里加 `password = "..."`（公网建议设）。
 4. 注意：云端容器重启会重置文件系统，`user_hero` / `lineup` / `eval_run` 会丢；武将库/战法库/立绘在仓库里所以不丢。要长期保留个人数据，后续把 `db.py` 的 `DB_PATH` 换成外部 Postgres/Supabase 连接即可（`STZB_DB` 现在支持环境变量，接外部库属于下一步改造）。
 
 ## 2. 固定 IP/域名 + 7×24 → 自己的云服务器（Docker）
@@ -73,7 +75,7 @@ python -m stzb_app.tools.tunnel start --provider cloudflare
 
 | 目标 | 需要改的 | 不用改的 |
 |---|---|---|
-| Streamlit Cloud | 推 GitHub；Secrets 里写 password | 代码、数据文件、组件 |
+| Streamlit Cloud | 推 GitHub；仓库与应用都设公开；Secrets 里写 password | 代码、数据文件、组件 |
 | VPS / Docker | 拷仓库；设 `STZB_PASSWORD` | 代码、组件、立绘 |
 | Cloudflare 命名隧道 | 设 `CLOUDFLARE_TUNNEL_TOKEN` / `STZB_PUBLIC_URL` / `--provider cloudflare` | 代码、数据 |
 

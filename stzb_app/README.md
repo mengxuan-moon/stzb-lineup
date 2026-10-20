@@ -101,6 +101,31 @@ python -m stzb_app.tools.tunnel stop      :: 关闭
 - **访问口令**：`.streamlit/secrets.toml` 里的 `password`（或环境变量 `STZB_PASSWORD`）。本机 `localhost` 免口令，公网访问必须输；`tunnel start` 在没设口令时会拒绝开公网（除非 `--allow-public`，不建议）。
 - 换入口不改代码：`tunnel.py` 的 `PROVIDERS` 是扩展点，新增一种 = 加一个 `start_xxx(port)` 注册进去。
 
+## 云端部署（Streamlit Community Cloud，固定网址）
+
+线上实例：`https://stzb-lineup-dgwusnd6zfdtn65f87ocg9.streamlit.app`（仓库 `mengxuan-moon/stzb-lineup`，入口文件 `stzb_app/app.py`）。电脑关机也能访问。
+
+**两个坑，实测踩过**：
+
+1. **私有仓库 → 应用默认私有**。浏览器里登录了 Streamlit 的人能直接打开，匿名访问却被 303 踢去登录页，于是「我这儿能打开」是假象（手机、别人的电脑照样打不开）。把仓库转 Public 只是第一步，**必须再去应用里翻一次开关**：
+   share.streamlit.io → 打开该应用 → 右下角 `⋮` → **Settings → Sharing → "Who can view this app"** → 选 public / anyone with the link → Save。
+   判据只有一个：`curl -s -o NUL -w "%{http_code}" <地址>/_stcore/health` 返回 **200**。返回 303 就是还被鉴权挡着。
+2. **`app.py` 用绝对包名 `from stzb_app import …`**，所以文件第 14-16 行把项目根塞进了 `sys.path`。入口路径按 `stzb_app/app.py` 填即可，不要改成 `streamlit_app.py`（仓库里没有这个文件）。
+
+**口令**：本机用 `.streamlit/secrets.toml`（已 gitignore，不入库）；云端要在应用 **Advanced settings → Secrets** 里填同样的东西：
+
+```toml
+password = "换成你的口令"
+```
+
+没有口令时公网页面对所有人开放（`_access_gate()` 只在设了口令后才生效，`localhost` 永远免口令）。
+
+**免费版的两个限制（不是 bug）**：
+
+- 约 12 小时无访问会休眠，下次打开要等 20~40 秒唤醒。
+- 容器重启/重新部署后文件系统回到仓库初始状态：**武将库 / 战法库 / 立绘不丢**（都在仓库里），但「我的武将」「我的战法」的勾选、保存的队伍、评分历史会重置。要做真正持久，需把 `db.py` 的 `DB_PATH` 换成外部库（`STZB_DB` 环境变量已预留口子），或用 `deploy/Dockerfile` 自建服务器挂数据卷。
+
+
 
 
 
