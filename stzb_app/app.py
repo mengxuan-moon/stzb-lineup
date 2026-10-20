@@ -285,12 +285,21 @@ if "owned_rev" not in st.session_state:
     st.session_state["owned_rev"] = 0
 rev = int(st.session_state["owned_rev"])
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["① 常用武将", "② 常用战法", "③ 配将界面", "④ 推荐结果", "⑤ 数据与规则"])
+# 页签用「导航控件 + if 分发」而不是 st.tabs：st.tabs 会把五个页签的脚本**全部执行**，
+# 每次 rerun 都要序列化 391 武将 + 636 战法 + 每将可用战法的池子再发给前端，
+# 首屏因此慢好几十秒。改成只执行当前页后，① 页只跑检索。
+_PAGE_NAMES = ["① 常用武将", "② 常用战法", "③ 配将界面", "④ 推荐结果", "⑤ 数据与规则"]
+_pick = st.segmented_control(
+    "页签", _PAGE_NAMES, default=_PAGE_NAMES[0], key="page_nav",
+    label_visibility="collapsed",
+) if hasattr(st, "segmented_control") else st.radio(
+    "页签", _PAGE_NAMES, index=0, horizontal=True, key="page_nav",
+    label_visibility="collapsed")
+page = _pick or _PAGE_NAMES[0]
 
 
 # ---------------------------------------------------------------- tab1
-with tab1:
+if page == _PAGE_NAMES[0]:
     st.subheader("常用武将（快捷筛选，可跳过）：勾选 或 按名称输入")
     st.caption("两种方式并存、结果合并保存：列表适合批量勾选，检索框适合只记得名字（或「5星 骑」这类特征）的时候。")
 
@@ -333,7 +342,7 @@ with tab1:
 
 
 # ---------------------------------------------------------------- tab2
-with tab2:
+if page == _PAGE_NAMES[1]:
     st.subheader("常用战法（快捷筛选，可跳过）：勾选 或 按名称输入")
     st.caption("「允许拆解」开关打开时，可拆战法也算已拥有；开关状态会落库（B2 口径）。同样支持检索框。")
     allow_dismantle = st.toggle(
@@ -391,7 +400,7 @@ with tab2:
 
 
 # ---------------------------------------------------------------- tab3
-with tab3:
+if page == _PAGE_NAMES[2]:
     st.subheader("配将界面（复刻主城：底部武将画像 → 拖入大营 / 中军 / 前锋）")
 
     def _board_members(state: dict) -> list[dict]:
@@ -506,7 +515,7 @@ with tab3:
 
 
 # ---------------------------------------------------------------- tab4
-with tab4:
+if page == _PAGE_NAMES[3]:
     st.subheader("推荐结果")
     q1, q2, q3, q4 = st.columns(4)
     cost_limit = q1.number_input("队伍统率上限", 1.0, 15.0, float(settings.get("cost_limit") or 10.0), 0.5)
@@ -612,7 +621,7 @@ with tab4:
 
 
 # ---------------------------------------------------------------- tab5
-with tab5:
+if page == _PAGE_NAMES[4]:
     st.subheader("数据来源")
     for r in conn.execute("SELECT file_path, rows, cols, imported_at FROM data_source "
                           "ORDER BY file_path"):

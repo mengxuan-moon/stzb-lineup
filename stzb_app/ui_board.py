@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 
+import streamlit as st
 import streamlit.components.v1 as components
 
 from . import core
@@ -78,37 +79,50 @@ def _int(v) -> int:
         return 0
 
 
+@st.cache_resource(show_spinner=False, max_entries=4)
+def _build_pools(_index, _img_map, owned_heroes: tuple[str, ...]) -> dict:
+    """构建组件用的三个大字典（缓存）。
+
+    这是首屏真正的大头：391 武将 × 636 战法的兵种兼容矩阵（约 25 万次比较）。
+    `_index` / `_img_map` 用下划线前缀让 Streamlit 跳过哈希（它们不可哈希），
+    真正参与缓存键的是 owned_heroes —— 它只影响排序，变化频率很低。
+    """
+    oh = set(owned_heroes)
+    heroes = _hero_items(_index, set(), oh, _img_map)
+
+    skills: dict[str, dict] = {}
+    hero_skills: dict[str, list[str]] = {}
+    all_skill_ids = [s["skill_id"] for s in _index.skills]
+    # 战法也恒为全库；「常用战法」只影响排序提示，不再收窄可选项。
+    for sid in all_skill_ids:
+        s = _index.skill_by_id.get(sid) or {}
+        skills[sid] = {"name": s.get("name") or sid,
+                       "quality": s.get("quality") or "",
+                       "type": s.get("skill_type") or ""}
+    for h in _index.heroes:
+        troop = h.get("troop") or ""
+        ok = []
+        for sid in all_skill_ids:
+            s = _index.skill_by_id.get(sid) or {}
+            lim = (s.get("troop_limit") or "").strip()
+            if not troop or not lim or lim == "未获取" or troop in lim:
+                ok.append(sid)
+        hero_skills[h["hero_id"]] = ok
+    return {"heroes": heroes, "skills": skills, "hero_skills": hero_skills}
+
+
 def build_args(conn, index: core.Index, state: dict, cost_limit: float,
                owned_heroes: list[str], owned_skills: list[str]) -> dict:
     """组装组件入参：武将池、战法池、每将可用战法、当前状态。"""
-    oh = set(owned_heroes)   # 只用来标「常用」并排前，不再收窄武将池
     from . import portraits as portrait_mod
     try:
         img_map = portrait_mod.img_map(conn)
     except Exception:      # 老库还没建 hero_portrait 表时不要拖垮页面
         img_map = {}
-    # 离线版：武将池恒为全库（不要求先勾持仓），勾过的靠 owned 标记排到最前当快捷筛选。
-    heroes = _hero_items(index, set(), oh, img_map)
-
-    skills: dict[str, dict] = {}
-    hero_skills: dict[str, list[str]] = {}
-    all_skill_ids = [s["skill_id"] for s in index.skills]
-    # 战法也恒为全库；「常用战法」只影响排序提示，不再收窄可选项。
-    use_ids = all_skill_ids
-    for sid in use_ids:
-        s = index.skill_by_id.get(sid) or {}
-        skills[sid] = {"name": s.get("name") or sid,
-                       "quality": s.get("quality") or "",
-                       "type": s.get("skill_type") or ""}
-    for h in index.heroes:
-        troop = h.get("troop") or ""
-        ok = []
-        for sid in use_ids:
-            s = index.skill_by_id.get(sid) or {}
-            lim = (s.get("troop_limit") or "").strip()
-            if not troop or not lim or lim == "未获取" or troop in lim:
-                ok.append(sid)
-        hero_skills[h["hero_id"]] = ok
+    pools = _build_pools(index, img_map, tuple(sorted(owned_heroes)))
+    heroes = pools["heroes"]
+    skills = pools["skills"]
+    hero_skills = pools["hero_skills"]
 
     note = [f"武将库全库 {len(heroes)} 名、战法全库 {len(skills)} 个，可直接拖；常用清单只影响排序。"]
     return {
