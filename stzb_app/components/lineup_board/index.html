@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --ink:#0f0d0a; --panel:#1b1813; --panel2:#221e17; --line:#3a3225;
+    --gold:#c8a35a; --gold2:#e8cd94; --text:#e9e2d0; --dim:#9c9382;
+    --wei:#4a7bd0; --shu:#d0554a; --wu:#3fae7a; --qun:#9b7bb8; --han:#d0a94a; --jin:#5fb3c8;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:transparent;color:var(--text);
+    font-family:"Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;}
+  #app{padding:2px 2px 6px}
+  /* ---------------- 顶栏 ---------------- */
+  .topbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    background:linear-gradient(180deg,#241f18,#171410);border:1px solid var(--line);
+    border-radius:10px;padding:10px 14px;margin-bottom:10px}
+  .topbar .title{font-size:15px;letter-spacing:3px;color:var(--gold2);font-weight:600}
+  .topbar .sep{flex:1}
+  .namebox{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--dim)}
+  .namebox input{background:#100e0b;border:1px solid var(--line);color:var(--text);
+    border-radius:6px;padding:5px 8px;font-size:13px;width:150px;outline:none}
+  .namebox input:focus{border-color:var(--gold)}
+  .cost{font-size:12px;color:var(--dim);display:flex;align-items:center;gap:8px;min-width:190px}
+  .cost b{color:var(--gold2);font-size:15px;letter-spacing:1px}
+  .bar{flex:1;height:8px;background:#0d0b08;border:1px solid var(--line);border-radius:6px;overflow:hidden;min-width:80px}
+  .bar>i{display:block;height:100%;width:0%;background:linear-gradient(90deg,#8d6b2f,#e8cd94);transition:width .18s}
+  .bar.over>i{background:linear-gradient(90deg,#7a2b2b,#e06a6a)}
+  .hint{font-size:11.5px;color:#7f7767}
+  /* ---------------- 阵容位 ---------------- */
+  .slots{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px}
+  .slot{position:relative;min-height:252px;border-radius:12px;border:1px dashed #4b4130;
+    background:radial-gradient(120% 90% at 50% 0%,#231e16 0%,#15120d 100%);
+    display:flex;flex-direction:column;align-items:center;justify-content:flex-start;
+    padding:10px 10px 26px;transition:border-color .15s,box-shadow .15s,background .15s}
+  .slot.over{border-color:var(--gold);box-shadow:0 0 0 2px rgba(200,163,90,.35) inset;background:#241f16}
+  .slot .posname{position:absolute;top:6px;left:10px;font-size:12px;letter-spacing:2px;color:var(--gold2)}
+  .slot .empty{color:#6d6555;font-size:12px;margin:auto;text-align:center;line-height:1.9}
+  .slot.filled{justify-content:center;border-style:solid;border-color:#4b4028}
+  .slot .rm{position:absolute;top:4px;right:6px;background:transparent;border:0;color:#8a8170;
+    cursor:pointer;font-size:15px;padding:2px 6px;border-radius:6px}
+  .slot .rm:hover{color:#e06a6a;background:#2a1c18}
+  /* 武将卡（阵容位内） */
+  .card{width:100%;border-radius:10px;overflow:hidden;border:1px solid #4a3f2c;
+    background:#14110d;box-shadow:0 6px 16px rgba(0,0,0,.45);cursor:pointer;position:relative}
+  .card .art{position:relative;height:152px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .card .art .glyph{font-size:52px;font-weight:700;color:#fff;opacity:.92;text-shadow:0 2px 10px rgba(0,0,0,.6);
+    font-family:"Songti SC","SimSun",serif}
+  .pimg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:top center;
+    display:block;z-index:1}
+  .pimg.fade{animation:fade .25s ease}
+  @keyframes fade{from{opacity:0}to{opacity:1}}
+  .card .art .stars,.card .art .cost,.card .art .troop,
+  .pcard .pill .st,.pcard .pill .cs{z-index:2}
+  .card .art .stars{position:absolute;left:8px;top:6px;font-size:10px;color:#ffd76a;letter-spacing:1px;text-shadow:0 1px 2px #000}
+  .card .art .cost{position:absolute;right:6px;top:6px;background:rgba(10,8,6,.72);border:1px solid #6b5a3a;
+    color:var(--gold2);font-size:10.5px;border-radius:5px;padding:1px 5px}
+  .card .art .troop{position:absolute;left:6px;bottom:6px;background:rgba(10,8,6,.72);
+    border:1px solid #6b5a3a;border-radius:5px;font-size:10px;padding:1px 5px;color:#e9e2d0}
+  .card .meta{padding:6px 8px 7px}
+  .card .hname{font-size:13.5px;font-weight:600;letter-spacing:1px;color:#f3ecda;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .card .sub{font-size:10.5px;color:var(--dim);margin-top:2px;display:flex;gap:6px;flex-wrap:wrap}
+  .card .sk{margin-top:6px;display:flex;flex-direction:column;gap:3px}
+  .card .sk span{font-size:10.5px;border:1px solid #3d3425;background:#1d1913;border-radius:4px;
+    padding:1px 5px;color:#cfc6b2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .card .sk span.none{color:#6c6455;border-style:dashed}
+  .card.picked{outline:2px solid var(--gold);outline-offset:-2px}
+  /* ---------------- 战法面板 ---------------- */
+  .panel{background:linear-gradient(180deg,#1e1a14,#15120e);border:1px solid var(--line);
+    border-radius:10px;padding:10px 12px;margin-bottom:10px;display:none}
+  .panel.on{display:block}
+  .panel .phead{font-size:12px;color:var(--gold2);letter-spacing:1px;margin-bottom:8px}
+  .panel .prow{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .panel label{font-size:11.5px;color:var(--dim)}
+  .panel select{background:#100e0b;border:1px solid var(--line);color:var(--text);border-radius:6px;
+    padding:5px 6px;font-size:12px;max-width:330px;outline:none}
+  .panel select:focus{border-color:var(--gold)}
+  /* ---------------- 武将库 ---------------- */
+  .poolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+  .poolbar .lab{font-size:12px;color:var(--gold2);letter-spacing:2px}
+  .poolbar input{background:#100e0b;border:1px solid var(--line);color:var(--text);
+    border-radius:6px;padding:5px 8px;font-size:12.5px;width:230px;outline:none}
+  .poolbar input:focus{border-color:var(--gold)}
+  .chips{display:flex;gap:5px;flex-wrap:wrap}
+  .chip{font-size:11px;border:1px solid var(--line);background:#17140f;color:#a89f8d;
+    border-radius:20px;padding:2px 9px;cursor:pointer;user-select:none}
+  .chip.on{border-color:var(--gold);color:#11100c;background:var(--gold)}
+  .poolwrap{border:1px solid var(--line);border-radius:10px;background:
+    repeating-linear-gradient(0deg,#13110d 0 3px,#14120e 3px 6px);padding:8px}
+  .pool{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 8px;scrollbar-width:thin}
+  .pool::-webkit-scrollbar{height:8px}
+  .pool::-webkit-scrollbar-thumb{background:#3a3225;border-radius:4px}
+  .pcard{flex:0 0 92px;border-radius:8px;overflow:hidden;border:1px solid #3f3626;background:#14110d;
+    cursor:grab;transition:transform .12s,border-color .12s;position:relative}
+  .pcard:hover{transform:translateY(-3px);border-color:#8d7440}
+  .pcard.dragging{opacity:.45}
+  .pcard.used{border-color:#5a4a2a}
+  .pcard.used:after{content:"已上阵";position:absolute;top:0;right:0;left:0;text-align:center;
+    font-size:9.5px;background:rgba(200,163,90,.85);color:#14110d;letter-spacing:1px;padding:1px 0}
+  .pcard .pill{height:86px;display:flex;align-items:center;justify-content:center;position:relative}
+  .pcard .pill .g{font-size:34px;font-weight:700;color:#fff;opacity:.9;font-family:"Songti SC","SimSun",serif;
+    text-shadow:0 2px 8px rgba(0,0,0,.55)}
+  .pcard .pill .st{position:absolute;left:4px;top:3px;font-size:8.5px;color:#ffd76a}
+  .pcard .pill .cs{position:absolute;right:3px;top:3px;font-size:9px;color:var(--gold2);
+    background:rgba(10,8,6,.7);border-radius:3px;padding:0 3px}
+  .pcard .nm{font-size:12px;text-align:center;padding:3px 2px 4px;white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis;color:#f0e9d8}
+  .foot{font-size:10.5px;color:#6f6757;margin-top:6px;line-height:1.7}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="topbar">
+    <div class="title">配 将</div>
+    <div class="namebox">队伍名 <input id="tname" value="" maxlength="20"></div>
+    <div class="sep"></div>
+    <div class="cost">统率 <b id="cnum">0.0</b><span>/</span><span id="clim">10.0</span>
+      <div class="bar" id="cbar"><i id="cfill"></i></div>
+    </div>
+  </div>
+  <div class="hint" style="margin:-4px 0 8px">拖拽下方武将卡到「大营 / 中军 / 前锋」；也可先点武将、再点位置。点已上阵的武将卡可换战法。</div>
+  <div class="slots" id="slots"></div>
+  <div class="panel" id="panel"></div>
+  <div class="poolbar">
+    <span class="lab">武将库</span>
+    <input id="q" placeholder="搜索：名字 / 阵营 / 兵种 / 星级">
+    <div class="chips" id="filters"></div>
+    <div class="sep" style="flex:1"></div>
+    <span class="hint" id="poolcount"></span>
+  </div>
+  <div class="poolwrap"><div class="pool" id="pool"></div></div>
+  <div class="foot" id="foot"></div>
+</div>
+<script>
+(function(){
+  const POS = ["大营","中军","前锋"];
+  const CAMP = {"魏":"#4a7bd0","蜀":"#d0554a","吴":"#3fae7a","群":"#9b7bb8","汉":"#d0a94a","晋":"#5fb3c8"};
+  const TROOP = {"步":"#c8a35a","骑":"#c2674f","弓":"#6fae6a"};
+  let A = null;                  // args from python
+  let S = {name:"我的队伍1", slots:{}};   // component state
+  let sel = null;                // 点选中的 hero_id（等待点位置）
+  let editPos = null;            // 正在改战法的位置
+  let filter = {camp:null, troop:null};
+  let q = "";
+  const $ = id => document.getElementById(id);
+
+  function post(type, payload){
+    parent.postMessage(Object.assign({isStreamlitMessage:true, type:type}, payload||{}), "*");
+  }
+  function setHeight(){
+    post("streamlit:setFrameHeight", {height: Math.ceil(document.getElementById("app").getBoundingClientRect().height)+8});
+  }
+  function emit(){
+    post("streamlit:setComponentValue", {value: JSON.parse(JSON.stringify(S)), dataType:"json"});
+    renderCost();
+    setTimeout(setHeight, 30);
+  }
+  function hero(id){ return (A && A.heroes || []).find(h => h.id === id); }
+  function skill(id){ return (A && A.skills || {})[id]; }
+  function slotOf(heroId){
+    for (const p of POS) { const m = S.slots[p]; if (m && m.hero_id === heroId) return p; }
+    return null;
+  }
+  function costSum(){
+    let n = 0;
+    for (const p of POS) { const m = S.slots[p]; const h = m && hero(m.hero_id); if (h) n += Number(h.cost||0); }
+    return n;
+  }
+  function renderCost(){
+    const lim = Number((A && A.cost_limit) || 10);
+    const used = costSum();
+    $("cnum").textContent = used.toFixed(1);
+    $("clim").textContent = lim.toFixed(1);
+    const pctv = Math.min(100, lim ? used/lim*100 : 0);
+    $("cfill").style.width = pctv + "%";
+    $("cbar").classList.toggle("over", used > lim + 1e-9);
+  }
+  function artBg(h){
+    const c = CAMP[h.camp] || "#6b6350";
+    const t = TROOP[h.troop] || "#8a8070";
+    return `linear-gradient(160deg, ${c}33 0%, #12100c 46%, ${t}44 100%)`;
+  }
+  function glyph(h){
+    const n = (h.name||"?").replace(/[（(].*$/,"");
+    return n.slice(-1);   // 取末字（率土卡常见「姓」或名，占位用末字更好认）
+  }
+  function stars(n){ n = Number(n||0); return "★".repeat(Math.max(0,Math.min(5,n))); }
+
+  function renderSlots(){
+    $("slots").innerHTML = POS.map(p => {
+      const m = S.slots[p];
+      if (!m || !hero(m.hero_id)) {
+        return `<div class="slot" data-pos="${p}">
+          <div class="posname">${p}</div>
+          <div class="empty">${sel ? "点这里放入" : "空位"}<br><span style="font-size:10.5px">拖拽武将到此</span></div>
+        </div>`;
+      }
+      const h = hero(m.hero_id);
+      const s1 = m.skills && m.skills[0] ? skill(m.skills[0]) : null;
+      const s2 = m.skills && m.skills[1] ? skill(m.skills[1]) : null;
+      return `<div class="slot filled" data-pos="${p}" data-hero="${h.id}">
+        <div class="posname">${p}</div>
+        <button class="rm" data-rm="${p}" title="移出阵容">✕</button>
+        <div class="card ${editPos===p?"picked":""}" data-edit="${p}">
+          <div class="art" style="background:${artBg(h)}">
+            <div class="stars">${stars(h.star)}</div>
+            <div class="glyph">${glyph(h)}</div>
+            ${h.img ? `<img class="pimg fade" src="img/${h.img}" alt="${h.name}" onerror="this.remove()">` : ""}
+            <div class="cost">${Number(h.cost||0).toFixed(1)}</div>
+            <div class="troop">${h.troop||"?"}</div>
+          </div>
+          <div class="meta">
+            <div class="hname">${h.name}${h.suffix||""}</div>
+            <div class="sub"><span>${h.camp||""}</span><span>攻 ${h.atk||"-"}</span><span>谋 ${h.guile||"-"}</span><span>防 ${h.def||"-"}</span></div>
+            <div class="sk">
+              ${s1 ? `<span title="${s1.name}">战法1 ${s1.name}</span>` : `<span class="none">战法1 未选</span>`}
+              ${s2 ? `<span title="${s2.name}">战法2 ${s2.name}</span>` : `<span class="none">战法2 未选</span>`}
+            </div>
+          </div>
+        </div>
+      </div>`;
+    }).join("");
+    bindSlots();
+  }
+
+  function renderPanel(){
+    const el = $("panel");
+    if (!editPos) { el.className = "panel"; el.innerHTML = ""; return; }
+    const m = S.slots[editPos];
+    const h = m && hero(m.hero_id);
+    if (!h) { el.className = "panel"; el.innerHTML = ""; return; }
+    const ids = (A.hero_skills && A.hero_skills[h.id]) || [];
+    const opts = ids.map(id => {
+      const s = skill(id) || {name:id, quality:"", type:""};
+      const mark = (m.skills||[]).includes(id) ? "" : "";
+      return `<option value="${id}" ${((m.skills||[])[0]===id||(m.skills||[])[1]===id)?"selected":""}>${s.quality?s.quality+"·":""}${s.name}</option>`;
+    }).join("");
+    const blank = `<option value="">（不选）</option>`;
+    el.className = "panel on";
+    el.innerHTML = `<div class="phead">${editPos} · ${h.name} —— 选择战法（只列兵种兼容且已拥有的战法）</div>
+      <div class="prow">
+        <label>战法1</label><select data-sk="0">${blank}${opts}</select>
+        <label>战法2</label><select data-sk="1">${blank}${opts}</select>
+        <button class="chip" id="closepanel">完成</button>
+      </div>`;
+    el.querySelectorAll("select").forEach(selEl => {
+      selEl.onchange = () => {
+        const k = Number(selEl.getAttribute("data-sk"));
+        const mm = S.slots[editPos];
+        if (!mm.skills) mm.skills = ["", ""];
+        mm.skills[k] = selEl.value || null;
+        const other = mm.skills[1-k];
+        if (mm.skills[k] && other && other === mm.skills[k]) {
+          selEl.value = "";
+          mm.skills[k] = null;
+          alert("同一位置的战法1、战法2 不能重复");
+          return;
+        }
+        renderSlots(); renderPanel(); emit();
+      };
+    });
+    const cl = $("closepanel");
+    if (cl) cl.onclick = () => { editPos = null; renderSlots(); renderPanel(); setHeight(); };
+    setHeight();
+  }
+
+  function assign(heroId, pos){
+    if (!hero(heroId)) return;
+    const from = slotOf(heroId);
+    const occ = S.slots[pos] && S.slots[pos].hero_id;
+    if (from === pos) { sel = null; renderSlots(); return; }
+    if (from) {  // 已在别处：移动
+      const old = S.slots[from];
+      S.slots[from] = null;
+      if (occ && occ !== heroId) S.slots[from] = {hero_id: occ, skills:["",""]};
+      S.slots[pos] = {hero_id: heroId, skills: old.skills || ["",""]};
+    } else {
+      if (occ && occ !== heroId) {   // 目标已有人：从库里拖来则替换（原武将回武将库），从别处拖来则互换
+        S.slots[pos] = {hero_id: heroId, skills:["",""]};
+      } else {
+        S.slots[pos] = {hero_id: heroId, skills:["",""]};
+      }
+    }
+    sel = null; editPos = pos;
+    renderAll(); emit();
+  }
+
+  function bindSlots(){
+    document.querySelectorAll(".slot").forEach(sl => {
+      sl.addEventListener("dragover", e => { e.preventDefault(); sl.classList.add("over"); });
+      sl.addEventListener("dragleave", () => sl.classList.remove("over"));
+      sl.addEventListener("drop", e => {
+        e.preventDefault(); sl.classList.remove("over");
+        const id = e.dataTransfer.getData("text/plain");
+        if (id) assign(id, sl.getAttribute("data-pos"));
+      });
+      sl.addEventListener("click", e => {
+        if (e.target.closest(".rm") || e.target.closest("[data-edit]")) return;
+        const p = sl.getAttribute("data-pos");
+        if (sel) { assign(sel, p); return; }
+        const m = S.slots[p];
+        if (m) { editPos = p; renderSlots(); renderPanel(); }
+      });
+    });
+    document.querySelectorAll(".rm").forEach(b => {
+      b.onclick = e => {
+        e.stopPropagation();
+        const p = b.getAttribute("data-rm");
+        S.slots[p] = null;
+        if (editPos === p) editPos = null;
+        renderAll(); emit();
+      };
+    });
+    document.querySelectorAll("[data-edit]").forEach(c => {
+      c.addEventListener("click", e => {
+        e.stopPropagation();
+        editPos = c.getAttribute("data-edit");
+        renderSlots(); renderPanel();
+      });
+    });
+  }
+
+  function renderFilters(){
+    const camps = [...new Set((A.heroes||[]).map(h=>h.camp).filter(Boolean))];
+    const troops = [...new Set((A.heroes||[]).map(h=>h.troop).filter(Boolean))];
+    $("filters").innerHTML =
+      `<span class="chip ${filter.camp?"":"on"}" data-f="camp:">全部阵营</span>` +
+      camps.map(c=>`<span class="chip ${filter.camp===c?"on":""}" data-f="camp:${c}">${c}</span>`).join("") +
+      troops.map(t=>`<span class="chip ${filter.troop===t?"on":""}" data-f="troop:${t}">${t}</span>`).join("");
+    $("filters").querySelectorAll(".chip").forEach(ch => {
+      ch.onclick = () => {
+        const [k, v] = ch.getAttribute("data-f").split(":");
+        if (k === "camp") filter.camp = v || null;
+        if (k === "troop") filter.troop = (filter.troop === v ? null : v);
+        renderFilters(); renderPool();
+      };
+    });
+  }
+
+  function renderPool(){
+    const hh = (A.heroes||[]).filter(h => {
+      if (filter.camp && h.camp !== filter.camp) return false;
+      if (filter.troop && h.troop !== filter.troop) return false;
+      if (q) {
+        const t = (h.name + h.camp + h.troop + h.star + h.cost).toLowerCase();
+        if (!q.toLowerCase().split(/\s+/).every(w => t.indexOf(w) >= 0)) return false;
+      }
+      return true;
+    });
+    $("poolcount").textContent = `共 ${hh.length} 名`;
+    $("pool").innerHTML = hh.map(h => {
+      const used = !!slotOf(h.id);
+      return `<div class="pcard ${used?"used":""} ${sel===h.id?"picked":""}" draggable="true" data-h="${h.id}"
+                title="${h.name}　${h.camp}·${h.troop}　cost ${Number(h.cost||0).toFixed(1)}">
+        <div class="pill" style="background:${artBg(h)}">
+          <div class="st">${stars(h.star)}</div>
+          <div class="g">${glyph(h)}</div>
+          ${h.img ? `<img class="pimg" src="img/${h.img}" alt="${h.name}" loading="lazy" onerror="this.remove()">` : ""}
+          <div class="cs">${Number(h.cost||0).toFixed(1)}</div>
+        </div>
+        <div class="nm">${h.name}</div>
+      </div>`;
+    }).join("") || `<div class="hint" style="padding:10px">没有匹配的武将：换个关键词，或清空筛选。</div>`;
+    document.querySelectorAll(".pcard").forEach(c => {
+      const id = c.getAttribute("data-h");
+      c.addEventListener("dragstart", e => {
+        e.dataTransfer.setData("text/plain", id);
+        e.dataTransfer.effectAllowed = "copyMove";
+        c.classList.add("dragging");
+      });
+      c.addEventListener("dragend", () => c.classList.remove("dragging"));
+      c.addEventListener("click", () => { sel = (sel === id ? null : id); renderPool(); renderSlots(); });
+    });
+    setHeight();
+  }
+
+  function renderAll(){ renderCost(); renderSlots(); renderPanel(); renderPool(); renderFoot(); }
+
+  function renderFoot(){
+    const n = POS.filter(p => S.slots[p]).length;
+    $("foot").innerHTML = (A && A.note) ? A.note : "";
+    $("poolcount").textContent = $("poolcount").textContent; // noop
+    if (n < 3) $("foot").innerHTML += `<div>还差 ${3-n} 个位置（三个位置都选满才能保存）。</div>`;
+  }
+
+  function applyArgs(args){
+    // 兼容两种形状：kwargs 平铺（`_COMPONENT(**args)`）和多包一层（旧写法）。
+    if (args && args.args && typeof args.args === "object") args = args.args;
+    A = args || {heroes:[], skills:{}, hero_skills:{}, cost_limit:10};
+    if (args && args.state) {
+      const st = args.state;
+      S = {name: st.name || "我的队伍1", slots: Object.assign({"大营":null,"中军":null,"前锋":null}, st.slots || {})};
+      if (!S.slots) S.slots = {};
+      POS.forEach(p => { if (!S.slots[p]) S.slots[p] = null; });
+    }
+    if (args && args.reset_token) { sel = null; editPos = null; }
+    $("tname").value = S.name || "";
+    $("tname").oninput = () => { S.name = $("tname").value; emit(); };
+    $("q").oninput = () => { q = $("q").value.trim(); renderPool(); };
+    renderFilters(); renderAll();
+    setHeight();
+  }
+
+  window.addEventListener("message", e => {
+    const d = e.data;
+    if (!d || d.type !== "streamlit:render") return;
+    applyArgs(d.args);
+  });
+  post("streamlit:componentReady", {apiVersion: 1});
+  new ResizeObserver(() => setHeight()).observe(document.getElementById("app"));
+  setTimeout(() => { if (!A) { A = {heroes:[],skills:{},hero_skills:{},cost_limit:10}; renderFilters(); renderAll(); } }, 400);
+})();
+</script>
+</body>
+</html>

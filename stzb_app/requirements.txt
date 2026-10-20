@@ -1,0 +1,7 @@
+# 率土之滨 · 配将推荐 —— 运行依赖
+#
+# 实测环境：Python 3.13.14（3.11+ 均可；代码未用 3.13 专属语法）
+# 依赖清单来源：`Select-String -Path stzb_app\*.py -Pattern '^\s*(import|from)\s+'`
+#   app.py 以外只有标准库（sqlite3 / csv / json / hashlib / statistics / pathlib / typing …），
+#   没有 pandas / numpy / requests，所以这里只锁 streamlit 一个。
+streamlit==1.66.0

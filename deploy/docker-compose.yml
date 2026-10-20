@@ -1,0 +1,26 @@
+# 一键容器部署：docker compose -f deploy/docker-compose.yml up -d --build
+# 默认只绑 127.0.0.1:8501（由前面的 Caddy/Nginx/Cloudflare 隧道做 HTTPS 入口）；
+# 想让局域网直连，把 ports 改成 "8501:8501"。
+services:
+  stzb:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: stzb-lineup:1
+    container_name: stzb
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8501:8501"
+    environment:
+      # 设了就开启访问口令（不设=公开可看，公网部署建议设）
+      STZB_PASSWORD: "${STZB_PASSWORD:-}"
+    volumes:
+      - stzb_data:/app/stzb_app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  stzb_data:

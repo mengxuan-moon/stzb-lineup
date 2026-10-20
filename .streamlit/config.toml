@@ -1,0 +1,15 @@
+# Streamlit 全局配置：固定深色金边主题，避免云端/本机主题不一致导致配色跑偏。
+[theme]
+base = "dark"
+primaryColor = "#f2c76e"
+backgroundColor = "#0f1013"
+secondaryBackgroundColor = "#17181c"
+textColor = "#e6e1d6"
+
+[server]
+headless = true
+# 云端不需要文件监听，关掉省资源也少一类报错
+fileWatcherType = "none"
+
+[browser]
+gatherUsageStats = false

@@ -1,0 +1,19 @@
+# 只发布「配将程序本体」。
+# E:\dsh 同时是开发工作区，里面还有个人笔记、爬虫脚本、侦察产物、下载物（cloudflared 55MB）、
+# 原始战报抓取目录（72MB）—— 这些都不该进公开仓库，所以用「白名单」而不是逐个排除。
+/*
+!/.gitignore
+!/requirements.txt
+!/.streamlit/
+!/stzb_app/
+!/deploy/
+
+# 白名单内部仍然要排掉的东西
+__pycache__/
+*.pyc
+*.pyo
+stzb_app/logs/
+*.log
+stzb_app/data/*.db-wal
+stzb_app/data/*.db-shm
+.streamlit/secrets.toml

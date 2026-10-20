@@ -1,0 +1,5 @@
+# 率土之滨 · 配将推荐 —— 仓库根依赖（Streamlit Cloud / Docker 都用这份）
+# 运行时只有 streamlit 一个第三方依赖：app.py 之外全部是标准库
+# （sqlite3 / csv / json / hashlib / statistics / pathlib / urllib …）。
+# 本地 Windows 实测：Python 3.13.14 + streamlit 1.66.0。
+streamlit==1.66.0

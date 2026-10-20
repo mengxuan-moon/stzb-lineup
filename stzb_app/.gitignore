@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# SQLite WAL 边车文件（data/stzb.db 本身要保留，边车是运行时产物）
+data/*.db-wal
+data/*.db-shm
+
+# 运行时临时库（冒烟测试副本若手动拷进仓库时别提交）
+*.db.bak
+*.db.tmp
