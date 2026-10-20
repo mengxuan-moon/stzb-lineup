@@ -39,24 +39,60 @@ def _is_cloud() -> bool:
     return str(BASE_DIR).startswith("/mount/src")
 
 
+def _rt_paths() -> tuple[Path, Path, Path]:
+    """返回（运行副本, 版本标记, -wal 侧车）。"""
+    base = Path(tempfile.gettempdir()) / "stzb_runtime"
+    return base / "stzb.db", base / "shipped.stamp", base / "stzb.db-wal"
+
+
+def _drop(p: Path) -> bool:
+    """尽力删除文件；Windows 上被占用时先改名再删（改名对已打开文件也可能失败）。"""
+    try:
+        if p.exists():
+            p.unlink()
+        return True
+    except OSError:
+        pass
+    try:
+        if p.exists():
+            tmp = p.with_suffix(p.suffix + f".bad{os.getpid()}")
+            os.replace(p, tmp)
+            tmp.unlink()
+            return True
+    except OSError:
+        pass
+    return False
+
+
 def _runtime_db(path: Path) -> Path:
     """云端：把发布的库复制到 tempfile 下的运行副本并返回它。
 
-    库随仓库发布、每次部署回来都是初始状态，所以复制成本只有几 MB；
+    判据用「发布件的 (size, mtime_ns) 戳」，**不能**拿运行副本的 size 去比：
+    用户一写库，运行副本就比发布件大，会被误判成「需要重拷」而把当次写丢掉。
+
     复制失败（只读盘等）就退回原路径，让上层报出真实错误。
     """
-    rt = Path(tempfile.gettempdir()) / "stzb_runtime" / "stzb.db"
+    rt, stamp_path, wal = _rt_paths()
     try:
         rt.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            same = rt.exists() and rt.stat().st_size == path.stat().st_size
-            if not same:
-                shutil.copy2(path, rt)
-                # 复制件旁边绝不能留旧的 -wal/-shm，否则会拼出坏库
-                for suf in ("-wal", "-shm"):
-                    leftover = Path(str(rt) + suf)
-                    if leftover.exists():
-                        leftover.unlink()
+        if not path.exists():
+            return rt if rt.exists() else path
+        st = path.stat()
+        stamp = f"{st.st_size}:{st.st_mtime_ns}"
+        try:
+            old = stamp_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            old = ""
+        need = (not rt.exists()) or old != stamp
+        if need:
+            shutil.copy2(path, rt)
+            # 复制件旁边绝不能留旧的 -wal/-shm，否则会拼出坏库
+            _drop(wal)
+            _drop(Path(str(rt) + "-shm"))
+            try:
+                stamp_path.write_text(stamp, encoding="utf-8")
+            except OSError:
+                pass
     except OSError:
         return path
     return rt if rt.exists() else path
@@ -178,16 +214,16 @@ def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
         return _open(path)
     except sqlite3.DatabaseError as exc:
         msg = str(exc).lower()
-        # 只对「云上运行副本」做一次自愈：删除坏副本、从发布件重拷再开。
+        # 只对「云上运行副本」做一次自愈：删坏副本、强制重拷、再开。
+        # Windows 上被占用的文件删不掉（WinError 32），所以 _drop 会改名绕开；
+        # 并且必须显式写 stamp 失效，否则 _runtime_db 会以为副本还是新的而跳过重拷。
         if not ("malformed" in msg or "corrupt" in msg or "not a database" in msg):
             raise
         if db_path or not _is_cloud():
             raise
-        for suf in ("", "-wal", "-shm"):
-            try:
-                Path(str(path) + suf).unlink()
-            except OSError:
-                pass
+        rt, stamp_path, _ = _rt_paths()
+        for target in (rt, Path(str(rt) + "-wal"), Path(str(rt) + "-shm"), stamp_path):
+            _drop(target)
         _runtime_db(_SHIPPED_DB)
         return _open(path)
 
@@ -195,16 +231,25 @@ def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
 def _open(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=30, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 30000")
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA synchronous = NORMAL")
     try:
-        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
-        if str(mode).lower() != "wal":
-            conn.execute("PRAGMA journal_mode = WAL")
-    except sqlite3.DatabaseError:
-        pass
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 30000")
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA synchronous = NORMAL")
+        try:
+            mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+            if str(mode).lower() != "wal":
+                conn.execute("PRAGMA journal_mode = WAL")
+        except sqlite3.DatabaseError:
+            pass
+    except BaseException:
+        # 建连成功但 PRAGMA 就报 malformed 时，连接必须关掉：
+        # 否则 Windows 上文件被占、上层重拷时删不掉坏库。
+        try:
+            conn.close()
+        except Exception:
+            pass
+        raise
     return conn
 
 

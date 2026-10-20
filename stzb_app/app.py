@@ -265,7 +265,7 @@ def load_manual_seeds(user_key: str) -> list[dict]:
 # ---------------------------------------------------------------- layout
 # 构建标记：每次发版改一下，用来一眼确认线上跑的是不是最新代码
 # （Cloud 有过「页面像新版、代码是旧版 .pyc」的坑，见 README 云端排障）。
-BUILD_TAG = "2026-10-20-offline1"
+BUILD_TAG = "2026-10-20-offline2"
 
 st.title("⚔️ 率土之滨 · 配将推荐")
 st.caption(f"规则引擎 + 评分表（v1，不做战斗模拟）｜build {BUILD_TAG}")
