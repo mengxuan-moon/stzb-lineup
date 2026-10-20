@@ -81,19 +81,20 @@ def _int(v) -> int:
 def build_args(conn, index: core.Index, state: dict, cost_limit: float,
                owned_heroes: list[str], owned_skills: list[str]) -> dict:
     """组装组件入参：武将池、战法池、每将可用战法、当前状态。"""
-    oh, os_ = set(owned_heroes), set(owned_skills)
-    pool_full = not oh  # 没勾持仓时给全库，和引擎的 pool_fallback 口径一致
+    oh = set(owned_heroes)   # 只用来标「常用」并排前，不再收窄武将池
     from . import portraits as portrait_mod
     try:
         img_map = portrait_mod.img_map(conn)
     except Exception:      # 老库还没建 hero_portrait 表时不要拖垮页面
         img_map = {}
-    heroes = _hero_items(index, oh if oh else set(), oh, img_map)
+    # 离线版：武将池恒为全库（不要求先勾持仓），勾过的靠 owned 标记排到最前当快捷筛选。
+    heroes = _hero_items(index, set(), oh, img_map)
 
     skills: dict[str, dict] = {}
     hero_skills: dict[str, list[str]] = {}
     all_skill_ids = [s["skill_id"] for s in index.skills]
-    use_ids = [i for i in all_skill_ids if (not os_) or i in os_]
+    # 战法也恒为全库；「常用战法」只影响排序提示，不再收窄可选项。
+    use_ids = all_skill_ids
     for sid in use_ids:
         s = index.skill_by_id.get(sid) or {}
         skills[sid] = {"name": s.get("name") or sid,
@@ -109,13 +110,7 @@ def build_args(conn, index: core.Index, state: dict, cost_limit: float,
                 ok.append(sid)
         hero_skills[h["hero_id"]] = ok
 
-    note = []
-    if pool_full:
-        note.append("未勾选「我的武将」：武将库显示全库（与④页的全库回退口径一致）。")
-    if not os_:
-        note.append("未勾选「我的战法」：战法下拉显示全库兵种兼容战法。")
-    else:
-        note.append(f"战法下拉只列「我的战法」{len(os_)} 条中兵种兼容的部分。")
+    note = [f"武将库全库 {len(heroes)} 名、战法全库 {len(skills)} 个，可直接拖；常用清单只影响排序。"]
     return {
         "heroes": heroes,
         "skills": skills,

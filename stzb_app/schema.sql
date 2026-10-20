@@ -140,25 +140,30 @@ CREATE TABLE IF NOT EXISTS season_pool (
 -- ============================================================ C. 用户输入层
 
 CREATE TABLE IF NOT EXISTS user_hero (
-    hero_id       TEXT PRIMARY KEY REFERENCES hero(hero_id) ON DELETE CASCADE,
+    user_key      TEXT NOT NULL DEFAULT 'local',
+    hero_id       TEXT NOT NULL REFERENCES hero(hero_id) ON DELETE CASCADE,
     owned         INTEGER NOT NULL DEFAULT 1,
     copies        INTEGER,
     advance_level INTEGER,
     awaken        INTEGER,
-    note          TEXT
+    note          TEXT,
+    PRIMARY KEY (user_key, hero_id)
 );
 
 CREATE TABLE IF NOT EXISTS user_skill (
-    skill_id TEXT PRIMARY KEY REFERENCES skill(skill_id) ON DELETE CASCADE,
+    user_key TEXT NOT NULL DEFAULT 'local',
+    skill_id TEXT NOT NULL REFERENCES skill(skill_id) ON DELETE CASCADE,
     owned    INTEGER NOT NULL DEFAULT 1,
     copies   INTEGER,
     acquired_by_dismantle INTEGER,
     unlocked INTEGER,
-    note     TEXT
+    note     TEXT,
+    PRIMARY KEY (user_key, skill_id)
 );
 
 CREATE TABLE IF NOT EXISTS lineup (
     lineup_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_key        TEXT NOT NULL DEFAULT 'local',
     name            TEXT NOT NULL,
     source          TEXT NOT NULL DEFAULT 'manual',   -- user | manual | variant | generated
     parent_lineup_id INTEGER REFERENCES lineup(lineup_id) ON DELETE SET NULL,
@@ -168,8 +173,6 @@ CREATE TABLE IF NOT EXISTS lineup (
     created_at      TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     note            TEXT
 );
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_lineup_fingerprint ON lineup(fingerprint);
 
 CREATE TABLE IF NOT EXISTS lineup_member (
     lineup_id INTEGER NOT NULL REFERENCES lineup(lineup_id) ON DELETE CASCADE,
@@ -183,7 +186,7 @@ CREATE TABLE IF NOT EXISTS lineup_member (
 );
 
 CREATE TABLE IF NOT EXISTS user_settings (
-    settings_id    INTEGER PRIMARY KEY CHECK (settings_id = 1),
+    user_key       TEXT PRIMARY KEY,
     cost_limit     REAL NOT NULL DEFAULT 10.0,
     allow_dismantle INTEGER NOT NULL DEFAULT 0,
     season         TEXT NOT NULL DEFAULT 'S1',
@@ -196,6 +199,7 @@ CREATE TABLE IF NOT EXISTS user_settings (
 
 CREATE TABLE IF NOT EXISTS eval_run (
     run_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_key       TEXT NOT NULL DEFAULT 'local',
     created_at     TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     profile_id     TEXT NOT NULL DEFAULT 'default',
     target_mode    TEXT NOT NULL,

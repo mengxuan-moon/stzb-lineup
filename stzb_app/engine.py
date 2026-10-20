@@ -65,9 +65,11 @@ def load_weights(conn: sqlite3.Connection, target: str) -> tuple[dict, dict, tup
     return system, combat, merge, thresholds
 
 
-def load_owned(conn: sqlite3.Connection) -> tuple[list[str], list[str]]:
-    hero_ids = [r["hero_id"] for r in conn.execute("SELECT hero_id FROM user_hero WHERE owned=1")]
-    skill_ids = [r["skill_id"] for r in conn.execute("SELECT skill_id FROM user_skill WHERE owned=1")]
+def load_owned(conn: sqlite3.Connection, user_key: str = "local") -> tuple[list[str], list[str]]:
+    hero_ids = [r["hero_id"] for r in conn.execute(
+        "SELECT hero_id FROM user_hero WHERE user_key=? AND owned=1", (user_key,))]
+    skill_ids = [r["skill_id"] for r in conn.execute(
+        "SELECT skill_id FROM user_skill WHERE user_key=? AND owned=1", (user_key,))]
     return hero_ids, skill_ids
 
 
@@ -85,7 +87,7 @@ def lineup_members(conn: sqlite3.Connection, lineup_id: int) -> list[dict]:
 def save_lineup(conn: sqlite3.Connection, name: str, members: list[dict],
                 source: str = "user", parent_lineup_id: int | None = None, swap_note: str = "",
                 target_mode: str = "", note: str = "", fingerprint: str | None = None,
-                commit: bool = True) -> int:
+                user_key: str = "local", commit: bool = True) -> int:
     """写一支队伍并返回 lineup_id。
 
     列必须与占位符一一对应：旧版 VALUES 只有 6 个 ?，`note` 被写进了 swap_note、
@@ -94,11 +96,11 @@ def save_lineup(conn: sqlite3.Connection, name: str, members: list[dict],
     commit=False 供 engine._persist 用：一次推荐要写 lineup / team_score / reason_item
     等多张表，中途 commit 会把半截结果留在库里，所以整批写完由调用方提交一次。
     """
-    tm = target_mode or (dbmod.get_settings(conn).get("target_mode") or "打地")
+    tm = target_mode or (dbmod.get_settings(conn, user_key).get("target_mode") or "打地")
     cur = conn.execute(
-        "INSERT INTO lineup(name,source,parent_lineup_id,swap_note,target_mode,fingerprint,note)"
-        " VALUES(?,?,?,?,?,?,?)",
-        (name, source, parent_lineup_id, swap_note, tm, fingerprint, note),
+        "INSERT INTO lineup(user_key,name,source,parent_lineup_id,swap_note,target_mode,fingerprint,note)"
+        " VALUES(?,?,?,?,?,?,?,?)",
+        (user_key, name, source, parent_lineup_id, swap_note, tm, fingerprint, note),
     )
     lid = cur.lastrowid
     for m in members:
@@ -114,6 +116,22 @@ def save_lineup(conn: sqlite3.Connection, name: str, members: list[dict],
     if commit:
         conn.commit()
     return lid
+
+
+def list_lineups(conn: sqlite3.Connection, user_key: str = "local") -> list[dict]:
+    """该用户的「手动保存」队伍列表（不含 variant / generated），按保存顺序。
+    每项附 members（位置→武将→战法），供界面直接展示与重建。
+    """
+    rows = conn.execute(
+        "SELECT lineup_id,name,created_at FROM lineup WHERE user_key=? AND source='user' ORDER BY lineup_id",
+        (user_key,),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["members"] = lineup_members(conn, d["lineup_id"])
+        out.append(d)
+    return out
 
 
 def _hero_of(member: dict | None) -> dict:
@@ -453,11 +471,12 @@ def counter_analysis(conn: sqlite3.Connection, members: list) -> list[dict]:
 
 
 def build_substitutes(conn: sqlite3.Connection, base_members: list, base_total: float, index: core.Index,
-                      owned_hero_ids: list[str], owned_skill_ids: list[str], limit: int = 3) -> list[dict]:
+                      owned_hero_ids: list[str], owned_skill_ids: list[str], limit: int = 3,
+                      user_key: str = "local") -> list[dict]:
     out: list[dict] = []
     seen_fp = {core.fingerprint(base_members)}
-    cost_limit = float(dbmod.get_settings(conn).get("cost_limit") or 10.0)
-    ev_params = _eval_params(conn)
+    cost_limit = float(dbmod.get_settings(conn, user_key).get("cost_limit") or 10.0)
+    ev_params = _eval_params(conn, user_key)
     # limit=60 交给 expand_variants 自己劈成「换将 ≤30 / 换战法用剩余」两段，
     # 所以替补里换将、换战法两类都会出现，不会全被换将占满。
     all_scored: list[dict] = []
@@ -533,8 +552,8 @@ def load_rule_params(conn: sqlite3.Connection) -> dict:
     return {k: dbmod.get_param(conn, k, default) for k, default in RULE_PARAM_DEFAULTS.items()}
 
 
-def _eval_params(conn: sqlite3.Connection) -> dict:
-    settings = dbmod.get_settings(conn)
+def _eval_params(conn: sqlite3.Connection, user_key: str = "local") -> dict:
+    settings = dbmod.get_settings(conn, user_key)
     target = settings.get("target_mode") or "打地"
     system, combat, merge, thresholds = load_weights(conn, target)
     return {"target": target, "system": system, "combat": combat, "merge": merge, "thresholds": thresholds,
@@ -544,17 +563,17 @@ def _eval_params(conn: sqlite3.Connection) -> dict:
 # ------------------------------------------------------------------ 主流程
 
 
-def recommend(conn: sqlite3.Connection, seeds: list[dict], persist: bool = True) -> dict:
+def recommend(conn: sqlite3.Connection, seeds: list[dict], user_key: str = "local", persist: bool = True) -> dict:
     """seeds: [{"name": str, "members": [{position,hero_id,skill1_id,skill2_id}, ...]}]"""
-    init = _eval_params(conn)
-    settings = dbmod.get_settings(conn)
+    init = _eval_params(conn, user_key)
+    settings = dbmod.get_settings(conn, user_key)
     target, cost_limit = init["target"], init["cost_limit"]
     top_n = int(settings.get("top_n") or 10)
     budget_key = "search_budget_deep" if settings.get("budget_profile") == "deep" else "search_budget_fast"
     budget = dbmod.get_param(conn, budget_key, {"per_lineup": 20, "global_cap": 300})
 
     index = load_index(conn)
-    owned_hero_ids, owned_skill_ids = load_owned(conn)
+    owned_hero_ids, owned_skill_ids = load_owned(conn, user_key)
     # 没勾持仓时旧版静默回落全库，用户会以为算的是自己的卡池。
     # 这里记录回落事实，由 app 显式提示（数字由 app 从索引里取，不在这里塞）。
     hero_fallback = not owned_hero_ids
@@ -565,9 +584,9 @@ def recommend(conn: sqlite3.Connection, seeds: list[dict], persist: bool = True)
         owned_skill_ids = [s["skill_id"] for s in index.skill_by_id.values()]
 
     run = conn.execute(
-        "INSERT INTO eval_run(profile_id,target_mode,cost_limit,budget_profile,params_snapshot_json,engine_version)"
-        " VALUES('default',?,?,?,?,?)",
-        (target, cost_limit, settings.get("budget_profile") or "fast",
+        "INSERT INTO eval_run(user_key,profile_id,target_mode,cost_limit,budget_profile,params_snapshot_json,engine_version)"
+        " VALUES(?,'default',?,?,?,?,?)",
+        (user_key, target, cost_limit, settings.get("budget_profile") or "fast",
          json.dumps({"system": init["system"], "combat": init["combat"], "merge": init["merge"],
                      "thresholds": init["thresholds"], "budget": budget, "rule": init["rule"]},
                     ensure_ascii=False),
@@ -639,7 +658,7 @@ def recommend(conn: sqlite3.Connection, seeds: list[dict], persist: bool = True)
                             "evidence_message_id": h["message_id"]})
 
         counters = counter_analysis(conn, members)
-        subs = build_substitutes(conn, members, ev.total, index, owned_hero_ids, owned_skill_ids)
+        subs = build_substitutes(conn, members, ev.total, index, owned_hero_ids, owned_skill_ids, user_key=user_key)
         trio_row = conn.execute("SELECT games,win_rate,sample_flag FROM battle_stat WHERE trio_key=?",
                                 ("|".join(sorted(trio_ids)),)).fetchone()
         findings = ([{**e, "level": "error"} for e in ev.validation.errors]
@@ -658,7 +677,7 @@ def recommend(conn: sqlite3.Connection, seeds: list[dict], persist: bool = True)
         })
 
     if persist:
-        _persist(conn, run_id, results, index)
+        _persist(conn, user_key, run_id, results, index)
 
     conn.commit()
     return {"run_id": run_id, "target": target, "results": results,
@@ -667,7 +686,7 @@ def recommend(conn: sqlite3.Connection, seeds: list[dict], persist: bool = True)
             "pool_fallback": {"heroes": hero_fallback, "skills": skill_fallback}}
 
 
-def _persist(conn: sqlite3.Connection, run_id: int, results: list[dict], index: core.Index) -> None:
+def _persist(conn: sqlite3.Connection, user_key: str, run_id: int, results: list[dict], index: core.Index) -> None:
     for r in results:
         name = f"#{r['rank']} {r['total']:.1f}分"
         members = [{"position": s["position"], "hero_id": s["hero_id"],
@@ -676,13 +695,13 @@ def _persist(conn: sqlite3.Connection, run_id: int, results: list[dict], index: 
                    for s in r["spec"]]
         lid = None
         if r.get("fingerprint"):
-            row = conn.execute("SELECT lineup_id FROM lineup WHERE fingerprint=?",
-                               (r["fingerprint"],)).fetchone()
+            row = conn.execute("SELECT lineup_id FROM lineup WHERE user_key=? AND fingerprint=?",
+                               (user_key, r["fingerprint"])).fetchone()
             if row:
                 lid = row["lineup_id"]
         if lid is None:
             lid = save_lineup(conn, name, members, source=r["source"], swap_note=r["swap_note"],
-                              fingerprint=r.get("fingerprint"), commit=False)
+                              fingerprint=r.get("fingerprint"), user_key=user_key, commit=False)
         conn.execute(
             "INSERT OR REPLACE INTO team_score(run_id,lineup_id,rank,total_score,system_score,"
             "applicability_score,legality,dim_scores_json,verdict,fingerprint)"

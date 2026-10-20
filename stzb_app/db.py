@@ -26,9 +26,19 @@ PROFILE_ID = "default"
 
 # 库结构版本：写进 PRAGMA user_version。schema/种子有实质变化时才 +1，
 # 否则每次页面加载都会重跑建表脚本 —— 见 README「database is locked」那条。
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 LOCK_RETRIES = 8
 LOCK_BASE_SLEEP = 0.15
+
+# 新用户无 user_settings 行时的默认设置（与 _seed_settings 的 'local' 行保持一致）。
+DEFAULT_SETTINGS = {
+    "cost_limit": 10.0,
+    "allow_dismantle": 0,
+    "season": "S1",
+    "target_mode": "打地",
+    "top_n": 10,
+    "budget_profile": "fast",
+}
 
 # 系统六维（旧版 core.js WEIGHTS.system，原样复用）
 SYSTEM_WEIGHTS = {
@@ -185,7 +195,7 @@ def _init_once(conn: sqlite3.Connection) -> None:
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    """轻量迁移：老库补列 + 目标权重旧值→新值（不重建、不丢数据）。"""
+    """轻量迁移：老库补列 + 目标权重旧值→新值 + 多用户 user_key（不丢数据）。"""
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(lineup)")}
     if "fingerprint" not in cols:
         conn.execute("ALTER TABLE lineup ADD COLUMN fingerprint TEXT")
@@ -219,6 +229,101 @@ def _migrate(conn: sqlite3.Connection) -> None:
             "WHERE profile_id=? AND scope='target' AND target_mode=? AND dim_code=? AND weight=?",
             (new, PROFILE_ID, mode, dim, old),
         )
+
+    # v4 → v5：五张用户表加 user_key（多用户隔离）。幂等：已有该列就整表跳过。
+    _migrate_user_key(conn)
+
+
+def _has_col(conn: sqlite3.Connection, table: str, col: str) -> bool:
+    """表里是否已有某列（迁移幂等判断用）。"""
+    return any(r["name"] == col for r in conn.execute(f"PRAGMA table_info({table})"))
+
+
+def _migrate_user_key(conn: sqlite3.Connection) -> None:
+    """v4→v5：user_hero/user_skill/user_settings 重建主键为含 user_key；
+    lineup/eval_run 补 user_key 列 + 重建受影响索引。老数据一律 user_key='local'。
+
+    SQLite 不能直接改主键，所以改 PK 的表走「建新表→copy→drop→rename」；
+    lineup/eval_run 只是加列 + 改索引，ALTER TABLE ADD COLUMN 即可。每张表先
+    查列是否已存在，避免重复执行；「database is locked」由 _retry_locked 兜底，
+    而锁会阻止 DDL 执行，故不会留下半迁移状态。
+    """
+    # --- user_hero：PK (user_key, hero_id) ---
+    if not _has_col(conn, "user_hero", "user_key"):
+        conn.execute(
+            "CREATE TABLE user_hero_new ("
+            " user_key TEXT NOT NULL DEFAULT 'local',"
+            " hero_id TEXT NOT NULL REFERENCES hero(hero_id) ON DELETE CASCADE,"
+            " owned INTEGER NOT NULL DEFAULT 1,"
+            " copies INTEGER,"
+            " advance_level INTEGER,"
+            " awaken INTEGER,"
+            " note TEXT,"
+            " PRIMARY KEY (user_key, hero_id))"
+        )
+        conn.execute(
+            "INSERT INTO user_hero_new(user_key,hero_id,owned,copies,advance_level,awaken,note)"
+            " SELECT 'local',hero_id,owned,copies,advance_level,awaken,note FROM user_hero"
+        )
+        conn.execute("DROP TABLE user_hero")
+        conn.execute("ALTER TABLE user_hero_new RENAME TO user_hero")
+
+    # --- user_skill：PK (user_key, skill_id) ---
+    if not _has_col(conn, "user_skill", "user_key"):
+        conn.execute(
+            "CREATE TABLE user_skill_new ("
+            " user_key TEXT NOT NULL DEFAULT 'local',"
+            " skill_id TEXT NOT NULL REFERENCES skill(skill_id) ON DELETE CASCADE,"
+            " owned INTEGER NOT NULL DEFAULT 1,"
+            " copies INTEGER,"
+            " acquired_by_dismantle INTEGER,"
+            " unlocked INTEGER,"
+            " note TEXT,"
+            " PRIMARY KEY (user_key, skill_id))"
+        )
+        conn.execute(
+            "INSERT INTO user_skill_new(user_key,skill_id,owned,copies,acquired_by_dismantle,unlocked,note)"
+            " SELECT 'local',skill_id,owned,copies,acquired_by_dismantle,unlocked,note FROM user_skill"
+        )
+        conn.execute("DROP TABLE user_skill")
+        conn.execute("ALTER TABLE user_skill_new RENAME TO user_skill")
+
+    # --- user_settings：每用户一行，PK 用 user_key（原 settings_id 恒为 1，丢弃） ---
+    if not _has_col(conn, "user_settings", "user_key"):
+        conn.execute(
+            "CREATE TABLE user_settings_new ("
+            " user_key TEXT PRIMARY KEY,"
+            " cost_limit REAL NOT NULL DEFAULT 10.0,"
+            " allow_dismantle INTEGER NOT NULL DEFAULT 0,"
+            " season TEXT NOT NULL DEFAULT 'S1',"
+            " target_mode TEXT NOT NULL DEFAULT '打地',"
+            " top_n INTEGER NOT NULL DEFAULT 10,"
+            " budget_profile TEXT NOT NULL DEFAULT 'fast')"
+        )
+        conn.execute(
+            "INSERT INTO user_settings_new(user_key,cost_limit,allow_dismantle,season,target_mode,top_n,budget_profile)"
+            " SELECT 'local',cost_limit,allow_dismantle,season,target_mode,top_n,budget_profile"
+            " FROM user_settings WHERE settings_id=1"
+        )
+        conn.execute("DROP TABLE user_settings")
+        conn.execute("ALTER TABLE user_settings_new RENAME TO user_settings")
+
+    # --- lineup：补 user_key 列（索引统一在下面建） ---
+    if not _has_col(conn, "lineup", "user_key"):
+        conn.execute("ALTER TABLE lineup ADD COLUMN user_key TEXT NOT NULL DEFAULT 'local'")
+
+    # --- eval_run：补 user_key 列（索引统一在下面建） ---
+    if not _has_col(conn, "eval_run", "user_key"):
+        conn.execute("ALTER TABLE eval_run ADD COLUMN user_key TEXT NOT NULL DEFAULT 'local'")
+
+    # --- user_key 相关索引：新库老库都确保存在 ---
+    # 新库的 user_key 列来自 schema.sql 的 CREATE TABLE，老库由上面 ALTER 补上，
+    # 到这里两边的列都已就位。idx_lineup_fingerprint 从单列改成 (user_key, fingerprint)，
+    # 名称不变但定义变了，先 DROP 再 CREATE（IF NOT EXISTS 不会覆盖旧定义）。
+    conn.execute("DROP INDEX IF EXISTS idx_lineup_fingerprint")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_lineup_fingerprint ON lineup(user_key, fingerprint)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_lineup_user_created ON lineup(user_key, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_eval_run_user_created ON eval_run(user_key, created_at)")
 
 
 def _seed_profiles(conn: sqlite3.Connection) -> None:
@@ -257,8 +362,8 @@ def _seed_params(conn: sqlite3.Connection) -> None:
 
 def _seed_settings(conn: sqlite3.Connection) -> None:
     conn.execute(
-        "INSERT OR IGNORE INTO user_settings(settings_id,cost_limit,allow_dismantle,season,target_mode,top_n,budget_profile)"
-        " VALUES(1,10.0,0,'S1','打地',10,'fast')"
+        "INSERT OR IGNORE INTO user_settings(user_key,cost_limit,allow_dismantle,season,target_mode,top_n,budget_profile)"
+        " VALUES('local',10.0,0,'S1','打地',10,'fast')"
     )
 
 
@@ -279,16 +384,20 @@ def get_param_status(conn: sqlite3.Connection, key: str) -> str:
     return row["data_status"] if row else "missing_source"
 
 
-def get_settings(conn: sqlite3.Connection) -> dict:
-    row = conn.execute("SELECT * FROM user_settings WHERE settings_id=1").fetchone()
-    return dict(row) if row else {}
+def get_settings(conn: sqlite3.Connection, user_key: str = "local") -> dict:
+    row = conn.execute("SELECT * FROM user_settings WHERE user_key=?", (user_key,)).fetchone()
+    if not row:
+        return dict(DEFAULT_SETTINGS)
+    return dict(row)
 
 
-def set_settings(conn: sqlite3.Connection, **kwargs) -> None:
+def set_settings(conn: sqlite3.Connection, user_key: str = "local", **kwargs) -> None:
     if not kwargs:
         return
+    # 新用户可能还没有这一行，先 upsert 一行再更新，避免 UPDATE 落空。
+    conn.execute("INSERT OR IGNORE INTO user_settings(user_key) VALUES(?)", (user_key,))
     cols = ", ".join(f"{k}=?" for k in kwargs)
-    conn.execute(f"UPDATE user_settings SET {cols} WHERE settings_id=1", tuple(kwargs.values()))
+    conn.execute(f"UPDATE user_settings SET {cols} WHERE user_key=?", (*kwargs.values(), user_key))
     conn.commit()
 
 

@@ -4,7 +4,6 @@
 """
 from __future__ import annotations
 
-import hmac
 import os
 import sys
 from pathlib import Path
@@ -26,52 +25,10 @@ from stzb_app import ui_board
 
 st.set_page_config(page_title="率土之滨 · 配将推荐", page_icon="⚔️", layout="wide")
 
-
-def _is_local_request() -> bool:
-    """请求是不是从本机浏览器发来的（看 Host 头）。
-
-    本机浏览器访问 localhost/127.0.0.1/[::1] 时不要求口令，省得单机用一次输一次；
-    走隧道/反代进来时 Host 是公网域名，仍然要口令。取不到 header 时一律按「非本机」处理。
-    """
-    try:
-        host = (st.context.headers.get("Host") or "").strip().lower()
-    except Exception:
-        return False
-    return host.startswith(("localhost", "127.0.0.1", "[::1]"))
-
-
-def _access_gate() -> bool:
-    """公网部署用的极简门禁：只有设了 STZB_PASSWORD（或 secrets.password）才启用。
-
-    本地单机不设这个变量 → 直接放行，行为与单机版完全一致。
-    口令比较用 hmac.compare_digest（避免按字符短路比较的时序差异）。
-    """
-    want = os.environ.get("STZB_PASSWORD", "")
-    if not want:
-        try:
-            want = str(st.secrets.get("password", "") or "")
-        except Exception:  # 没有 secrets.toml 时 st.secrets 会抛异常，视为未设置
-            want = ""
-    if not want:
-        return True
-    if st.session_state.get("_stzb_ok") or _is_local_request():
-        return True
-
-    st.title("⚔️ 率土之滨 · 配将推荐")
-    st.caption("这个部署开启了访问口令，输入后本次会话免登录。")
-    with st.form("_stzb_gate"):
-        pw = st.text_input("访问口令", type="password")
-        submitted = st.form_submit_button("进入", type="primary")
-    if submitted:
-        if hmac.compare_digest(pw, want):
-            st.session_state["_stzb_ok"] = True
-            st.rerun()
-        st.error("口令不正确。")
-    return False
-
-
-if not _access_gate():
-    st.stop()
+# 离线版（v1）：不登录、不口令。数据表底层已带 user_key 列（留给后续账号版），
+# 这里固定用 'local'；界面不暴露标识，也不用 ?u=。需要临时隔离时设环境变量 STZB_USER。
+# 配将时不再要求先勾持仓：③ 页武将池/战法池默认就是全库（勾过的排前面当快捷筛选）。
+user_key = os.environ.get("STZB_USER") or "local"
 
 
 @st.cache_resource(show_spinner="加载索引 …")
@@ -94,7 +51,7 @@ def data_version(c: object) -> int:
     return sum(int(c.execute(f"SELECT COUNT(*) c FROM {t}").fetchone()["c"]) for t in tables)
 
 
-def _normalize_top_n(c: object) -> None:
+def _normalize_top_n(c: object, user_key: str) -> None:
     """把库里的 user_settings.top_n 归一到滑杆区间 [5, 10]。
 
     ④ 页滑杆最小值是 5；库里若被 `cli --selftest --top 3` / `--demo --top 3` 写成 3，
@@ -103,14 +60,14 @@ def _normalize_top_n(c: object) -> None:
     init_db 在 user_version 一致时直接短路返回，老库永远修不到；这里的 UPDATE
     带 WHERE 越界条件，正常 rerun 只读不写，只有真越界时才写一次。
     """
-    row = c.execute("SELECT top_n FROM user_settings WHERE settings_id=1").fetchone()
+    row = c.execute("SELECT top_n FROM user_settings WHERE user_key=?", (user_key,)).fetchone()
     if not row:
         return
     n = int(row["top_n"] or 10)
     if 5 <= n <= 10:
         return
-    c.execute("UPDATE user_settings SET top_n=? WHERE settings_id=1 AND (top_n<? OR top_n>?)",
-              (max(5, min(10, n)), 5, 10))
+    c.execute("UPDATE user_settings SET top_n=? WHERE user_key=? AND (top_n<? OR top_n>?)",
+              (max(5, min(10, n)), user_key, 5, 10))
     c.commit()
 
 
@@ -120,7 +77,7 @@ try:
     # 不执行 schema 脚本、不写种子数据，多标签页并发打开也不会互相抢写锁。
     # 真要建库时它自己带 database-is-locked 退避重试。
     dbmod.init_db(conn)
-    _normalize_top_n(conn)
+    _normalize_top_n(conn, user_key)
     ver = data_version(conn)
 except Exception as exc:  # 绝不静默吞异常：否则会伪装成「数据为空」
     st.error("数据库初始化失败，下面是原始异常（这不是「数据为空」）：")
@@ -130,7 +87,7 @@ except Exception as exc:  # 绝不静默吞异常：否则会伪装成「数据�
 if ver == 0:
     st.warning("数据库为空：需要先导入武将/战法/社区阵容数据。")
     st.caption("重建会用 `stzb_hero_data`、`stzb_skill_data`、`stzb_team_eval` 里的原始文件重新导入，覆盖当前库。")
-    ok = st.checkbox("我确认：重建并覆盖当前数据库（库里已有的「我的武将/我的战法/我的队伍」会丢失）")
+    ok = st.checkbox("我确认：重建并覆盖当前数据库（库里已有的「常用清单/我的队伍」会丢失）")
     if st.button("导入数据（约 10~30 秒）", type="primary", disabled=not ok):
         with st.spinner("导入中 …"):
             conn.close()
@@ -221,17 +178,19 @@ def skill_ids_for(index: core.Index, hero: dict | None) -> list[str]:
     return ids
 
 
-def owned_sets() -> tuple[list[str], list[str]]:
-    heroes = [r["hero_id"] for r in conn.execute("SELECT hero_id FROM user_hero WHERE owned=1")]
-    skills = [r["skill_id"] for r in conn.execute("SELECT skill_id FROM user_skill WHERE owned=1")]
+def owned_sets(user_key: str) -> tuple[list[str], list[str]]:
+    heroes = [r["hero_id"] for r in conn.execute(
+        "SELECT hero_id FROM user_hero WHERE user_key=? AND owned=1", (user_key,))]
+    skills = [r["skill_id"] for r in conn.execute(
+        "SELECT skill_id FROM user_skill WHERE user_key=? AND owned=1", (user_key,))]
     return heroes, skills
 
 
-def save_owned(table: str, id_col: str, ids: list[str]) -> None:
-    conn.execute(f"UPDATE {table} SET owned=0")
+def save_owned(table: str, id_col: str, ids: list[str], user_key: str) -> None:
+    conn.execute(f"UPDATE {table} SET owned=0 WHERE user_key=?", (user_key,))
     for i in ids:
-        conn.execute(f"INSERT INTO {table}({id_col}, owned) VALUES(?,1) "
-                     f"ON CONFLICT({id_col}) DO UPDATE SET owned=1", (i,))
+        conn.execute(f"INSERT INTO {table}(user_key,{id_col},owned) VALUES(?,?,1) "
+                     f"ON CONFLICT(user_key,{id_col}) DO UPDATE SET owned=1", (user_key, i))
     conn.commit()
 
 
@@ -248,7 +207,7 @@ def _on_budget_profile() -> None:
     c = dbmod.connect()
     try:
         label = str(st.session_state.get("budget_pick") or "")
-        dbmod.set_settings(c, budget_profile="deep" if label.startswith("B") else "fast")
+        dbmod.set_settings(c, user_key, budget_profile="deep" if label.startswith("B") else "fast")
     finally:
         c.close()
 
@@ -261,7 +220,7 @@ def _on_allow_dismantle() -> None:
     """
     c = dbmod.connect()
     try:
-        dbmod.set_settings(c, allow_dismantle=int(bool(st.session_state.get("allow_dismantle"))))
+        dbmod.set_settings(c, user_key, allow_dismantle=int(bool(st.session_state.get("allow_dismantle"))))
     finally:
         c.close()
 
@@ -290,9 +249,9 @@ def member_hero_name(m: dict | None) -> str:
     return f"（失效武将 {hid}）" if hid else "空"
 
 
-def load_manual_seeds() -> list[dict]:
-    rows = conn.execute("SELECT lineup_id, name FROM lineup WHERE source='user' "
-                        "ORDER BY lineup_id").fetchall()
+def load_manual_seeds(user_key: str) -> list[dict]:
+    rows = conn.execute("SELECT lineup_id, name FROM lineup WHERE user_key=? AND source='user' "
+                        "ORDER BY lineup_id", (user_key,)).fetchall()
     seeds = []
     for r in rows:
         members = [dict(m) if m else None for m in engine.lineup_members(conn, r["lineup_id"])]
@@ -306,14 +265,14 @@ def load_manual_seeds() -> list[dict]:
 st.title("⚔️ 率土之滨 · 配将推荐")
 st.caption("规则引擎 + 评分表（v1，不做战斗模拟）｜数据只在本机 SQLite")
 
-owned_heroes, owned_skills = owned_sets()
+owned_heroes, owned_skills = owned_sets(user_key)
 # 设置只在本次 run 开头读一次，②页开关、④页滑杆、⑤页说明共用同一份
-settings = dbmod.get_settings(conn)
+settings = dbmod.get_settings(conn, user_key)
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("武将库", f"{len(index.heroes)}")
 c2.metric("战法库", f"{len(index.skill_by_id)}")
-c3.metric("我的武将", f"{len(owned_heroes)}")
-c4.metric("我的战法", f"{len(owned_skills)}")
+c3.metric("常用武将", f"{len(owned_heroes)}")
+c4.metric("常用战法", f"{len(owned_skills)}")
 
 # 保存成功后 rev+1 → 勾选框/检索框换新的 widget key，从而重新按数据库内容渲染。
 # （不直接改 widget 的 session_state，避免 Streamlit「widget 已实例化后不能再改」的限制）
@@ -322,12 +281,12 @@ if "owned_rev" not in st.session_state:
 rev = int(st.session_state["owned_rev"])
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["① 我的武将", "② 我的战法", "③ 配将界面", "④ 推荐结果", "⑤ 数据与规则"])
+    ["① 常用武将", "② 常用战法", "③ 配将界面", "④ 推荐结果", "⑤ 数据与规则"])
 
 
 # ---------------------------------------------------------------- tab1
 with tab1:
-    st.subheader("我的武将：勾选 或 按名称输入")
+    st.subheader("常用武将（快捷筛选，可跳过）：勾选 或 按名称输入")
     st.caption("两种方式并存、结果合并保存：列表适合批量勾选，检索框适合只记得名字（或「5星 骑」这类特征）的时候。")
 
     q = st.text_input(
@@ -349,7 +308,7 @@ with tab1:
 
     ids_all = [h["hero_id"] for h in index.heroes]
     owned_set = set(owned_heroes)
-    st.multiselect("我的武将（完整列表）", ids_all, default=[i for i in ids_all if i in owned_set],
+    st.multiselect("常用武将（完整列表）", ids_all, default=[i for i in ids_all if i in owned_set],
                    format_func=lambda x: hero_label(index, x), key=f"pick_heroes_{rev}")
     col_a, col_b, _ = st.columns([1, 1, 3])
     if col_a.button("保存武将", type="primary", key="save_hero"):
@@ -357,20 +316,20 @@ with tab1:
         if matched:  # 只有检索框此刻真的在显示匹配项时，才把它的选择算进来
             picked_ids |= set(st.session_state.get(f"hero_search_pick_{rev}") or [])
         merged = [i for i in ids_all if i in picked_ids]
-        save_owned("user_hero", "hero_id", merged)
+        save_owned("user_hero", "hero_id", merged, user_key)
         st.session_state["owned_rev"] = rev + 1
         st.toast(f"已保存 {len(merged)} 名武将")
         st.rerun()
     if col_b.button("全选 5 星", key="all5"):
         picked = [h["hero_id"] for h in index.heroes if int(core.num(h.get("star")) or 0) >= 5]
-        save_owned("user_hero", "hero_id", picked)
+        save_owned("user_hero", "hero_id", picked, user_key)
         st.session_state["owned_rev"] = rev + 1
         st.rerun()
 
 
 # ---------------------------------------------------------------- tab2
 with tab2:
-    st.subheader("我的战法：勾选 或 按名称输入")
+    st.subheader("常用战法（快捷筛选，可跳过）：勾选 或 按名称输入")
     st.caption("「允许拆解」开关打开时，可拆战法也算已拥有；开关状态会落库（B2 口径）。同样支持检索框。")
     allow_dismantle = st.toggle(
         "允许拆解（把可拆战法视为已拥有）",
@@ -405,7 +364,7 @@ with tab2:
             for k in ("dismantle_skill_id", "dismantle_skill2_id"):
                 if h.get(k):
                     default_ids.add(h[k])
-    st.multiselect("我的战法（完整列表）", sid_all,
+    st.multiselect("常用战法（完整列表）", sid_all,
                    default=[i for i in sid_all if i in default_ids],
                    format_func=lambda x: skill_label(index, x),
                    key=f"pick_skills_{rev}_{int(allow_dismantle)}")
@@ -415,13 +374,13 @@ with tab2:
         if matched_s:
             picked_ids |= set(st.session_state.get(f"skill_search_pick_{rev}_{int(allow_dismantle)}") or [])
         merged = [i for i in sid_all if i in picked_ids]
-        save_owned("user_skill", "skill_id", merged)
+        save_owned("user_skill", "skill_id", merged, user_key)
         st.session_state["owned_rev"] = rev + 1
         st.toast(f"已保存 {len(merged)} 个战法")
         st.rerun()
     if col_b.button("全选 S/A", key="all_sa"):
         picked = [s["skill_id"] for s in index.skills if (s.get("quality") or "") in ("S", "A")]
-        save_owned("user_skill", "skill_id", picked)
+        save_owned("user_skill", "skill_id", picked, user_key)
         st.session_state["owned_rev"] = rev + 1
         st.rerun()
 
@@ -471,7 +430,8 @@ with tab3:
                     st.warning("武将重复：" + "、".join(hero_name(index, h) for h in dups))
                 else:
                     try:
-                        engine.save_lineup(conn, board_state.get("name") or "我的队伍", bms, source="user")
+                        engine.save_lineup(conn, board_state.get("name") or "我的队伍", bms, source="user",
+                                           user_key=user_key)
                     except Exception as exc:
                         st.error(f"保存失败：{exc}")
                     else:
@@ -518,15 +478,15 @@ with tab3:
                                + "　同一武将不能占两个位置")
                 else:
                     try:
-                        engine.save_lineup(conn, name, members, source="user")
+                        engine.save_lineup(conn, name, members, source="user", user_key=user_key)
                     except Exception as exc:
                         st.error(f"保存失败：{exc}（可能缺武将或同一武将重复）")
                     else:
                         st.toast(f"已保存：{name}")
                         st.rerun()
 
-    existing = conn.execute("SELECT lineup_id, name, created_at FROM lineup WHERE source='user' "
-                            "ORDER BY lineup_id").fetchall()
+    existing = conn.execute("SELECT lineup_id, name, created_at FROM lineup WHERE user_key=? AND source='user' "
+                            "ORDER BY lineup_id", (user_key,)).fetchall()
     if existing:
         st.markdown("#### 已保存的队伍")
         for r in existing:
@@ -535,7 +495,7 @@ with tab3:
                              for pos, m in zip(core.POSITIONS, ms))
             st.write(f"- **{r['name']}**　{txt}")
             if st.button("删除", key=f"del{r['lineup_id']}"):
-                conn.execute("DELETE FROM lineup WHERE lineup_id=?", (r["lineup_id"],))
+                conn.execute("DELETE FROM lineup WHERE lineup_id=? AND user_key=?", (r["lineup_id"], user_key))
                 conn.commit()
                 st.rerun()
 
@@ -560,19 +520,19 @@ with tab4:
     n0 = max(5, min(10, int(settings.get("top_n") or 10)))
     top_n = q4.slider("输出条数", 5, 10, n0)
 
-    seeds = load_manual_seeds()
+    seeds = load_manual_seeds(user_key)
     if seeds:
         st.success(f"使用你录入的 {len(seeds)} 支队伍作为种子")
     else:
         st.info("还没录入队伍：将用数据里的真实阵容当种子演示（结果仅供形式预览）。")
 
     if st.button("开始推荐", type="primary", key="run"):
-        dbmod.set_settings(conn, top_n=top_n, cost_limit=cost_limit, target_mode=target,
+        dbmod.set_settings(conn, user_key, top_n=top_n, cost_limit=cost_limit, target_mode=target,
                            budget_profile="deep" if budget.startswith("B") else "fast")
         if not seeds:
             seeds = cli.demo_seeds(conn, index, 2)
         with st.spinner("校验 + 变体 + 评分 …"):
-            payload = engine.recommend(conn, seeds)
+            payload = engine.recommend(conn, seeds, user_key=user_key)
         st.session_state["payload"] = payload
 
     payload = st.session_state.get("payload")
@@ -581,15 +541,14 @@ with tab4:
                    f"run_id={payload['run_id']}｜预算 {payload['budget']}")
         if payload.get("truncated"):
             st.caption("已达预算上限，候选被截断")
-        # 未勾持仓时引擎会回落全库：必须让用户知道他看的不是自己的卡池。
+        # 离线版默认就是全库评估（不要求先勾持仓），所以这里只作事实说明，不当异常警告。
         fb = payload.get("pool_fallback") or {}
         if fb.get("heroes") and fb.get("skills"):
-            st.warning(f"未勾选「我的武将/我的战法」：本次按全库（{len(index.heroes)} 将 / "
-                       f"{len(index.skill_by_id)} 战法）评估，不代表你的持仓。")
+            st.caption(f"按全库评估：{len(index.heroes)} 将 / {len(index.skill_by_id)} 战法（未用常用清单）。")
         elif fb.get("heroes"):
-            st.warning(f"未勾选「我的武将」：本次按全库 {len(index.heroes)} 位武将评估，不代表你的持仓。")
+            st.caption(f"武将按全库 {len(index.heroes)} 位评估；战法用了你的常用清单。")
         elif fb.get("skills"):
-            st.warning(f"未勾选「我的战法」：本次按全库 {len(index.skill_by_id)} 个战法评估，不代表你的持仓。")
+            st.caption(f"战法按全库 {len(index.skill_by_id)} 个评估；武将用了你的常用清单。")
         for r in payload["results"]:
             head = (f"#{r['rank']}　{r['total']:.1f} 分　"
                     f"{' / '.join(member_hero_name(m) for m in r['members'])}　"

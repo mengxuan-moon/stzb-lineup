@@ -34,6 +34,19 @@ python -m stzb_app.apptest_smoke         # 界面冒烟（AppTest，跑的是库
 - 建库前若已有 8501 端口的 Streamlit 在跑，先停掉（`netstat -ano | findstr :8501` 找 PID →
   `taskkill /PID <pid> /F`），否则 file-watcher 会在删库瞬间读到半截状态。
 
+## 版本与身份（离线版 v1）
+
+当前是**离线版**：不登录、不要口令，打开就能用，所有数据存在本机（云端则存在实例里）。
+
+- **不做登录 / 口令**：页面直接进。底层表已带 `user_key` 列（为后续「账号版」预留），离线版固定
+  写 `user_key='local'`，界面上不暴露标识、也不用 `?u=`。需要临时隔离一份数据时设环境变量
+  `STZB_USER=xxx` 再启动即可。
+- **配将不要求先勾持仓**：③ 页武将池就是全库 391 名、战法池是全库 636 个（仍按兵种兼容过滤），
+  打开就能拖。① ② 页的勾选改称「常用武将 / 常用战法」，作用只是把勾过的排到池子最前面当快捷筛选。
+- **后续账号版**（未做）：届时同一套表结构按 `user_key` 隔离每个人，前端加登录。
+
+历史库升级后老数据统一归 `user_key='local'`，也就是现在这份数据。
+
 ## 一键启动（推荐）
 
 项目根目录（`E:\dsh`）下双击即可：
@@ -98,7 +111,6 @@ python -m stzb_app.tools.tunnel stop      :: 关闭
 
 - 依赖 `downloads\cloudflared\cloudflared.exe`（约 55MB，未内置；缺了会打印官方下载地址）。**下载物统一放仓库根的 `downloads\`，不要落 C 盘**（见 `downloads\README.md`）。
 - **临时域名每次重启会变**；电脑关机即失效。要固定地址见 `deploy\DEPLOY.md`（Streamlit Cloud / VPS+Docker / Cloudflare 命名隧道三种路线，代码通用）。
-- **访问口令**：`.streamlit/secrets.toml` 里的 `password`（或环境变量 `STZB_PASSWORD`）。本机 `localhost` 免口令，公网访问必须输；`tunnel start` 在没设口令时会拒绝开公网（除非 `--allow-public`，不建议）。
 - 换入口不改代码：`tunnel.py` 的 `PROVIDERS` 是扩展点，新增一种 = 加一个 `start_xxx(port)` 注册进去。
 
 ## 云端部署（Streamlit Community Cloud，固定网址）
@@ -112,24 +124,19 @@ python -m stzb_app.tools.tunnel stop      :: 关闭
    判据只有一个：`curl -s -o NUL -w "%{http_code}" <地址>/_stcore/health` 返回 **200**。返回 303 就是还被鉴权挡着。
 2. **`app.py` 用绝对包名 `from stzb_app import …`**，所以文件第 14-16 行把项目根塞进了 `sys.path`。入口路径按 `stzb_app/app.py` 填即可，不要改成 `streamlit_app.py`（仓库里没有这个文件）。
 
-**口令**：本机用 `.streamlit/secrets.toml`（已 gitignore，不入库）；云端要在应用 **Advanced settings → Secrets** 里填同样的东西：
-
-```toml
-password = "换成你的口令"
-```
-
-没有口令时公网页面对所有人开放（`_access_gate()` 只在设了口令后才生效，`localhost` 永远免口令）。
+**无口令**：离线版不再有访问口令，打开即用；数据是这一份实例共用的 `user_key='local'`
+（见「版本与身份」一节）。等做账号版时再按 `user_key` 隔离。
 
 **免费版的两个限制（不是 bug）**：
 
 - 约 12 小时无访问会休眠，下次打开要等 20~40 秒唤醒。
-- 容器重启/重新部署后文件系统回到仓库初始状态：**武将库 / 战法库 / 立绘不丢**（都在仓库里），但「我的武将」「我的战法」的勾选、保存的队伍、评分历史会重置。要做真正持久，需把 `db.py` 的 `DB_PATH` 换成外部库（`STZB_DB` 环境变量已预留口子），或用 `deploy/Dockerfile` 自建服务器挂数据卷。
+- 容器重启/重新部署后文件系统回到仓库初始状态：**武将库 / 战法库 / 立绘不丢**（都在仓库里），但常用清单的勾选、保存的队伍、评分历史会重置。要做真正持久，需把 `db.py` 的 `DB_PATH` 换成外部库（`STZB_DB` 环境变量已预留口子），或用 `deploy/Dockerfile` 自建服务器挂数据卷。
 
 
 
 
 
-界面五个页签：① 勾我的武将 ② 勾我的战法 ③ 搭队伍（1~3 队，每队 3 人 × 2 战法）
+界面五个页签：① 常用武将（快捷筛选） ② 常用战法（快捷筛选） ③ 配将界面（全库直选、拖拽） ④ 推荐结果 ⑤ 数据与规则
 ④ 推荐结果（Top-10，含理由/战报证据/社区摘录/克制/替补）⑤ 数据与规则（来源清单、参数四态、权重）。
 
 ## 目录

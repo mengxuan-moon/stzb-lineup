@@ -14,7 +14,9 @@ python -m stzb_app.tools.tunnel stop       :: 关掉
 - 本机实测：cloudflared 自检 `precheck` 会报 `hard_fail=true`（UDP QUIC / TCP HTTP/2 / api.cloudflare.com 均被判失败），但隧道仍能注册成功（lax01/QUIC）；公网探测出现过瞬时 000，随即恢复 —— 这条链路不稳，重要场合别依赖它。
 - 域名解析与启动日志的关系：`tunnel start` 现在**只扫本次启动之后的日志**，并会用公网 `/_stcore/health` 反验域名可用，不会再把 `api.trycloudflare.com` 误当隧道地址。
 - 特性：零注册、立刻可用；**域名每次重启都变**；电脑关机即失效。
-- 安全：脚本默认**拒绝在无口令时开公网**。口令来自环境变量 `STZB_PASSWORD` 或 `.streamlit/secrets.toml` 的 `password`；本机 `localhost` 访问免口令，公网必须输。
+- 安全：**应用本身已无口令门禁**（离线版，打开即用）。`tunnel.py` 仍保留「无口令不许开公网」的前置校验
+  （口令来自 `STZB_PASSWORD` 或 `.streamlit/secrets.toml` 的 `password`），但那**不再影响界面**——它只是防止
+  你把服务裸露到公网的一道闸。真要开放公网，请自己加访问控制（Cloudflare Access、反代 basic auth 等）。
 
 ## 1. 固定地址 + 电脑可关机 → Streamlit Community Cloud（免费）
 
@@ -25,7 +27,7 @@ python -m stzb_app.tools.tunnel stop       :: 关掉
 2. share.streamlit.io → New app → 选仓库 → Main file path 填 `stzb_app/app.py` → Deploy。
 3. **把应用本身改成公开（最容易漏的一步）**：应用页右下角 `⋮` → Settings → Sharing → "Who can view this app" → 选 public / anyone with the link → Save。
    - 只把仓库转 Public **不够**：应用会带着部署时的私有状态继续要求登录。实测现象：浏览器里登录 Streamlit 的人能打开，匿名 `curl <地址>/_stcore/health` 却返回 **303**（跳 `share.streamlit.io/-/auth/app`）。判据就是 health 必须 **200**。
-4. 在 App settings → Secrets 里加 `password = "..."`（公网建议设）。
+4. 不需要配 Secrets：离线版应用本身不校验口令（打开即用）。若要加访问控制，请用 Streamlit 的 Sharing 白名单或反向代理。
 4. 注意：云端容器重启会重置文件系统，`user_hero` / `lineup` / `eval_run` 会丢；武将库/战法库/立绘在仓库里所以不丢。要长期保留个人数据，后续把 `db.py` 的 `DB_PATH` 换成外部 Postgres/Supabase 连接即可（`STZB_DB` 现在支持环境变量，接外部库属于下一步改造）。
 
 ## 2. 固定 IP/域名 + 7×24 → 自己的云服务器（Docker）
@@ -34,7 +36,7 @@ python -m stzb_app.tools.tunnel stop       :: 关掉
 
 ```bash
 git clone <你的仓库> stzb && cd stzb
-STZB_PASSWORD='换成你的口令' docker compose -f deploy/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml up -d --build   # 应用无口令，直接起
 # 前面挂 Caddy/Nginx 做 HTTPS，或直接用 Cloudflare 代理到 8501
 ```
 
@@ -75,8 +77,8 @@ python -m stzb_app.tools.tunnel start --provider cloudflare
 
 | 目标 | 需要改的 | 不用改的 |
 |---|---|---|
-| Streamlit Cloud | 推 GitHub；仓库与应用都设公开；Secrets 里写 password | 代码、数据文件、组件 |
-| VPS / Docker | 拷仓库；设 `STZB_PASSWORD` | 代码、组件、立绘 |
+| Streamlit Cloud | 推 GitHub；仓库与应用都设公开 | 代码、数据文件、组件 |
+| VPS / Docker | 拷仓库；`docker compose up -d --build`（应用已无口令） | 代码、组件、立绘 |
 | Cloudflare 命名隧道 | 设 `CLOUDFLARE_TUNNEL_TOKEN` / `STZB_PUBLIC_URL` / `--provider cloudflare` | 代码、数据 |
 
 `tunnel.py` 里的 `PROVIDERS` 字典就是扩展点：新增一种入口 = 加一个 `start_xxx(port) -> dict` 并注册进去，CLI/状态文件/README 都不用动。
